@@ -845,7 +845,86 @@ Status: complete.
   - `uv run memory-mcp review`
 - [x] add tests for status aggregation and process orchestration with a fake extractor
 
-### Milestone 8: Redaction And Secret Safety
+### Milestone 8: Agent-Agnostic Adapter Layer And Claude Code Support
+
+- make Memory MCP agent-agnostic by treating each agent/runtime as an adapter
+- define a normalized event contract that all adapters write into `events.sqlite`:
+  - event type
+  - source adapter
+  - project
+  - session id
+  - run id
+  - payload
+  - created time
+- keep the existing `memory-mcp-event append` CLI as the stable ingestion boundary
+- move Codex-specific assumptions into a Codex adapter package or examples directory
+- add Claude Code support as a first non-Codex adapter:
+  - document Claude Code MCP server registration for `memory-mcp-server`
+  - document Claude Code hook/event collection setup when available
+  - map Claude Code lifecycle payloads into the normalized event model
+  - preserve project/session identifiers when Claude Code exposes them
+  - use explicit fallback identifiers when it does not
+- keep operator workflow unchanged across agents:
+  - `uv run memory-mcp status`
+  - `uv run memory-mcp process`
+  - `uv run memory-mcp review`
+- add adapter docs:
+  - Codex setup
+  - Claude Code setup
+  - generic MCP client setup
+- add fixture tests for adapter payload normalization:
+  - Codex hook payload -> normalized event
+  - Claude Code payload -> normalized event
+  - missing session id fallback behavior
+- avoid embedding agent-specific behavior in core storage, review, or retrieval logic
+
+### Milestone 9: Codex Plugin Packaging
+
+- create a plugin wrapper so Memory MCP can be installed and used from Codex as a local plugin
+- include `.codex-plugin/plugin.json` with validated plugin metadata
+- include `.mcp.json` that registers the `memory-mcp` MCP stdio server:
+  - command: `uv`
+  - args: `--directory <project-root> run memory-mcp-server`
+  - env: `MEMORY_MCP_ROOT=<project-root>/.memory-mcp`
+- include Codex hook configuration for event collection:
+  - `UserPromptSubmit` -> `memory-mcp-event append --quiet --event-type user_prompt`
+  - `PostToolUse` -> `memory-mcp-event append --quiet --event-type tool_result`
+  - `Stop` -> `memory-mcp-event append --quiet --event-type turn_stop`
+- include a Memory MCP skill that teaches Codex:
+  - search memory when prior project context may help
+  - create explicit memories only for durable reusable lessons
+  - call `memory_feedback` only when a memory was actually used, helpful, stale, incorrect, or contradicted
+  - use `memory-mcp status`, `memory-mcp process`, and `memory-mcp review` for the operator workflow
+- include setup/status helper scripts:
+  - install dependencies
+  - warm the local embedding model
+  - print current memory status
+- validate plugin manifest with plugin tooling
+- document install/update flow for local development
+- keep core app usable without the plugin wrapper
+
+### Milestone 10: Claude Code Plugin Packaging
+
+- create a Claude Code packaging layer after the agent adapter boundary exists
+- document Claude Code MCP installation for `memory-mcp-server`
+- provide Claude Code configuration snippets for:
+  - MCP server registration
+  - memory store root selection
+  - project-scoped setup
+- provide Claude Code event capture setup when supported by Claude Code:
+  - map lifecycle events to `memory-mcp-event append`
+  - preserve project/session/run identifiers when available
+  - fall back to stable source/project identifiers when session metadata is unavailable
+- provide Claude-facing instructions comparable to the Codex Memory MCP skill:
+  - when to search memory
+  - when to create explicit memory
+  - when to send feedback
+  - how to use `memory-mcp status/process/review`
+- include setup/status helper scripts or docs specific to Claude Code usage
+- add fixture tests for Claude Code package/config generation where practical
+- keep Claude Code packaging separate from Codex plugin packaging
+
+### Milestone 11: Redaction And Secret Safety
 
 - add core redaction module for text and nested JSON-like payloads
 - redact hook/event payloads before writing `events.sqlite`
@@ -856,7 +935,7 @@ Status: complete.
 - add tests for API keys, bearer tokens, private keys, password fields, and nested payloads
 - support deleting memories by id
 
-### Milestone 9: Incremental Event CDC For Sessionization
+### Milestone 12: Incremental Event CDC For Sessionization
 
 - stop using full-table event scans for normal session refresh
 - add a sessionization checkpoint, for example `session_worker_last_event_created_at`
@@ -882,7 +961,7 @@ Status: complete.
   - long gaps create new segments
   - idle marking does not require scanning event payloads
 
-### Milestone 10: Candidate Merge And Rich Dashboard Workflow
+### Milestone 13: Candidate Merge And Rich Dashboard Workflow
 
 - support merging related candidates across segments
 - merge flow preserves:

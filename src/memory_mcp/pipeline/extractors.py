@@ -73,11 +73,13 @@ class CodexCliExtractor:
         *,
         codex_bin: str = "codex",
         model: str | None = None,
+        effort: str | None = None,
         timeout_seconds: int = 180,
         use_project_context: bool = False,
     ) -> None:
         self.codex_bin = codex_bin
         self.model = model
+        self.effort = effort
         self.timeout_seconds = timeout_seconds
         self.use_project_context = use_project_context
 
@@ -110,6 +112,8 @@ class CodexCliExtractor:
             ]
             if self.model is not None:
                 cmd.extend(["--model", self.model])
+            if self.effort is not None:
+                cmd.extend(["--config", f'model_reasoning_effort="{self.effort}"'])
             if self.use_project_context and segment.project and Path(segment.project).exists():
                 cmd.extend(["--cd", segment.project])
             cmd.append("-")
@@ -138,10 +142,74 @@ class CodexCliExtractor:
                 raise RuntimeError("codex exec did not write output-last-message file")
 
             raw_output = output_path.read_text(encoding="utf-8").strip()
+            return _parse_extraction_output(raw_output, provider="codex exec")
+
+
+class ClaudeCliExtractor:
+    def __init__(
+        self,
+        *,
+        claude_bin: str = "claude",
+        model: str | None = None,
+        effort: str | None = None,
+        timeout_seconds: int = 180,
+        use_project_context: bool = False,
+    ) -> None:
+        self.claude_bin = claude_bin
+        self.model = model
+        self.effort = effort
+        self.timeout_seconds = timeout_seconds
+        self.use_project_context = use_project_context
+
+    def extract(
+        self,
+        *,
+        segment: SessionSegmentRecord,
+        events: list[EventRecord],
+    ) -> ExtractionResult:
+        prompt = build_extraction_prompt(segment=segment, events=events)
+        schema_json = json.dumps(ExtractionResult.model_json_schema())
+        with tempfile.TemporaryDirectory(prefix="memory-mcp-extract-") as temp_dir:
+            temp_path = Path(temp_dir)
+            cmd = [
+                self.claude_bin,
+                "--bare",
+                "--print",
+                "--output-format",
+                "json",
+                "--json-schema",
+                schema_json,
+                "--no-session-persistence",
+            ]
+            if self.model is not None:
+                cmd.extend(["--model", self.model])
+            if self.effort is not None:
+                cmd.extend(["--effort", self.effort])
+            if self.use_project_context and segment.project and Path(segment.project).exists():
+                cmd.extend(["--add-dir", segment.project])
+            cmd.append(prompt)
+
             try:
-                return ExtractionResult.model_validate_json(raw_output)
-            except ValidationError as exc:
-                raise RuntimeError(f"codex exec returned invalid extraction JSON: {exc}") from exc
+                completed = subprocess.run(
+                    cmd,
+                    text=True,
+                    capture_output=True,
+                    timeout=self.timeout_seconds,
+                    check=False,
+                    cwd=temp_path,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"claude --print timed out after {self.timeout_seconds}s"
+                ) from exc
+
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    "claude --print failed "
+                    f"(exit={completed.returncode}): {completed.stderr.strip()}"
+                )
+
+            return _parse_extraction_output(completed.stdout.strip(), provider="claude")
 
 
 def build_extraction_prompt(
@@ -170,3 +238,33 @@ def build_extraction_prompt(
         f"{json.dumps(payload, indent=2)}\n"
         "</session_events_json>\n"
     )
+
+
+def _parse_extraction_output(raw_output: str, *, provider: str) -> ExtractionResult:
+    try:
+        return ExtractionResult.model_validate_json(raw_output)
+    except ValidationError as direct_error:
+        try:
+            envelope = json.loads(raw_output)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"{provider} returned invalid extraction JSON: {direct_error}"
+            ) from exc
+
+        if isinstance(envelope, dict):
+            for key in ("result", "content", "response", "text"):
+                value = envelope.get(key)
+                if isinstance(value, str):
+                    try:
+                        return ExtractionResult.model_validate_json(value.strip())
+                    except ValidationError:
+                        continue
+                if isinstance(value, dict):
+                    try:
+                        return ExtractionResult.model_validate(value)
+                    except ValidationError:
+                        continue
+
+        raise RuntimeError(
+            f"{provider} returned invalid extraction JSON: {direct_error}"
+        )

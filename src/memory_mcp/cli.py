@@ -8,7 +8,7 @@ import typer
 from memory_mcp.core.embeddings import LangChainHuggingFaceEmbedder
 from memory_mcp.core.models import MemoryCreate
 from memory_mcp.core.store import LocalMemoryStore
-from memory_mcp.pipeline.extractors import CodexCliExtractor
+from memory_mcp.pipeline.extractors import ClaudeCliExtractor, CodexCliExtractor
 from memory_mcp.operator import OperatorWorkflow
 from memory_mcp.review.server import create_app
 
@@ -125,24 +125,45 @@ def operator_process(
         help="Seconds between events before a new segment starts.",
     ),
     decay: bool = typer.Option(True, "--decay/--no-decay"),
+    extractor: str = typer.Option(
+        "codex",
+        help="LLM CLI extractor to use for candidate extraction: codex or claude.",
+    ),
     codex_bin: str = typer.Option("codex", help="Codex CLI executable for extraction."),
-    model: str | None = typer.Option(None, help="Optional Codex model override."),
-    timeout: int = typer.Option(180, min=1, help="Codex CLI timeout in seconds."),
+    claude_bin: str = typer.Option("claude", help="Claude CLI executable for extraction."),
+    model: str | None = typer.Option(None, help="Optional model override for the selected extractor."),
+    effort: str | None = typer.Option(
+        None,
+        help="Optional reasoning effort. Codex uses a config override; Claude uses --effort.",
+    ),
+    timeout: int = typer.Option(180, min=1, help="LLM CLI timeout in seconds."),
     project_context: bool = typer.Option(
         False,
-        help="Run Codex with --cd set to the segment project. Off by default to avoid hooks.",
+        help="Allow the selected extractor to access the segment project. Off by default to avoid hooks.",
     ),
 ) -> None:
-    extractor = None
+    memory_extractor = None
     if extraction_limit > 0:
-        extractor = CodexCliExtractor(
-            codex_bin=codex_bin,
-            model=model,
-            timeout_seconds=timeout,
-            use_project_context=project_context,
-        )
+        if extractor == "codex":
+            memory_extractor = CodexCliExtractor(
+                codex_bin=codex_bin,
+                model=model,
+                effort=effort,
+                timeout_seconds=timeout,
+                use_project_context=project_context,
+            )
+        elif extractor == "claude":
+            memory_extractor = ClaudeCliExtractor(
+                claude_bin=claude_bin,
+                model=model,
+                effort=effort,
+                timeout_seconds=timeout,
+                use_project_context=project_context,
+            )
+        else:
+            raise typer.BadParameter("extractor must be one of: codex, claude")
     result = OperatorWorkflow(root=root).process(
-        extractor=extractor,
+        extractor=memory_extractor,
         event_limit=event_limit,
         extraction_limit=extraction_limit,
         idle_after_seconds=idle_after,

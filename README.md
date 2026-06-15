@@ -75,15 +75,31 @@ candidates, and memory status counts.
 3. extract pending memory candidates from idle segments
 4. apply daily score decay unless disabled
 
-Useful options:
+Use Codex as the extraction agent:
 
 ```bash
 uv run memory-mcp process \
+  --extractor codex \
   --event-limit 100 \
   --extraction-limit 1 \
+  --model gpt-5 \
+  --effort high \
   --idle-after 600 \
   --max-gap 7200
 ```
+
+Use Claude Code as the extraction agent:
+
+```bash
+uv run memory-mcp process \
+  --extractor claude \
+  --model sonnet \
+  --effort medium
+```
+
+`--model` is passed to the selected CLI extractor. `--effort` maps to Codex's
+reasoning effort config when `--extractor codex` is used, and to Claude Code's
+`--effort` flag when `--extractor claude` is used.
 
 Use `--extraction-limit 0` to process events and session segments without
 calling the extractor:
@@ -310,12 +326,12 @@ Session statuses are `open`, `idle`, `processed`, `skipped`, and `failed`.
 Candidate statuses are `pending_review`, `approved`, `rejected`, and `merged`.
 Approving a candidate runs the normal memory creation path, including dedupe.
 
-The extractor uses `codex exec` non-interactively with a JSON schema and writes
-only `pending_review` candidates. It does not create active memories directly.
-By default it passes the session events as input and does not run Codex inside
-the project directory, so project hooks are not triggered recursively. Use
-`memory-mcp process --project-context` only when extraction needs repository
-file access.
+The extractor can use Codex CLI or Claude Code CLI. Both run non-interactively
+with a JSON schema and write only `pending_review` candidates. They do not
+create active memories directly. By default, extraction receives session events
+as input and avoids running inside the project directory so project hooks are not
+triggered recursively. Use `memory-mcp process --project-context` only when
+extraction needs repository file access.
 
 ### `memory-mcp-review`
 
