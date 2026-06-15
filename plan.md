@@ -847,8 +847,10 @@ Status: complete.
 
 ### Milestone 8: Agent-Agnostic Adapter Layer And Claude Code Support
 
-- make Memory MCP agent-agnostic by treating each agent/runtime as an adapter
-- define a normalized event contract that all adapters write into `events.sqlite`:
+Status: complete.
+
+- [x] make Memory MCP agent-agnostic by treating each agent/runtime as an adapter (`src/memory_mcp/adapters/`)
+- [x] define a normalized event contract that all adapters write into `events.sqlite`:
   - event type
   - source adapter
   - project
@@ -856,27 +858,27 @@ Status: complete.
   - run id
   - payload
   - created time
-- keep the existing `memory-mcp-event append` CLI as the stable ingestion boundary
-- move Codex-specific assumptions into a Codex adapter package or examples directory
-- add Claude Code support as a first non-Codex adapter:
-  - document Claude Code MCP server registration for `memory-mcp-server`
-  - document Claude Code hook/event collection setup when available
-  - map Claude Code lifecycle payloads into the normalized event model
-  - preserve project/session identifiers when Claude Code exposes them
-  - use explicit fallback identifiers when it does not
-- keep operator workflow unchanged across agents:
+- [x] keep the existing `memory-mcp-event append` CLI as the stable ingestion boundary
+- [x] move Codex-specific assumptions into a Codex adapter package or examples directory (`adapters/codex.py`, `hooks/examples/codex-hooks.json`)
+- [x] add Claude Code support as a first non-Codex adapter:
+  - [x] document Claude Code MCP server registration for `memory-mcp-server`
+  - [x] document Claude Code hook/event collection setup when available
+  - [x] map Claude Code lifecycle payloads into the normalized event model (`adapters/claude.py`)
+  - [x] preserve project/session identifiers when Claude Code exposes them
+  - [x] use explicit fallback identifiers when it does not (project-scoped `<source>:<project-name>`)
+- [x] keep operator workflow unchanged across agents:
   - `uv run memory-mcp status`
   - `uv run memory-mcp process`
   - `uv run memory-mcp review`
-- add adapter docs:
-  - Codex setup
-  - Claude Code setup
-  - generic MCP client setup
-- add fixture tests for adapter payload normalization:
-  - Codex hook payload -> normalized event
-  - Claude Code payload -> normalized event
-  - missing session id fallback behavior
-- avoid embedding agent-specific behavior in core storage, review, or retrieval logic
+- [x] add adapter docs:
+  - [x] Codex setup
+  - [x] Claude Code setup
+  - [x] generic MCP client setup
+- [x] add fixture tests for adapter payload normalization (`tests/test_adapters.py`):
+  - [x] Codex hook payload -> normalized event
+  - [x] Claude Code payload -> normalized event
+  - [x] missing session id fallback behavior
+- [x] avoid embedding agent-specific behavior in core storage, review, or retrieval logic
 
 ### Milestone 9: Codex Plugin Packaging
 

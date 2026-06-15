@@ -13,6 +13,7 @@ Milestone 1 implements a local memory store:
 ```text
 src/memory_mcp/
   core/        shared models, storage, embeddings, and event log
+  adapters/    agent-agnostic payload normalization (codex, claude, generic)
   mcp_server/  MCP stdio server and tool service layer
   hooks/       hook/event ingestion CLI and examples
   pipeline/    reusable event, session, candidate, and extraction workers
@@ -287,13 +288,21 @@ uv run memory-mcp-event status
 Useful event append options:
 
 - `--event-type`: normalized event type, for example `user_prompt`, `tool_result`, `turn_stop`, `memory_feedback`, or `memory_retrieved`
-- `--source`: event source adapter, for example `codex_hook`, `mcp_tool`, or `synthetic_test`
+- `--adapter`: agent adapter that normalizes the payload into the event contract; one of `codex`, `claude`, or `generic`
+- `--source`: event source adapter name; required unless `--adapter` is `codex` or `claude` (which set their own source)
 - `--payload`: JSON payload object; stdin is used when omitted
-- `--project`: project identifier or root path
-- `--session-id`: session/thread identifier
-- `--run-id`: run/turn identifier
+- `--project`: project identifier or root path; overrides any value the adapter reads from the payload
+- `--session-id`: session/thread identifier; overrides the adapter-derived value
+- `--run-id`: run/turn identifier; overrides the adapter-derived value
 - `--root`: event store root, default `.memory-mcp`
 - `--quiet`: suppress stdout for hook execution
+
+When `--adapter` is set, the adapter reads project/session/run identifiers from
+the piped lifecycle payload (for example Claude Code's `cwd` and `session_id`)
+so hooks do not need to pass them as flags. Explicit `--project`, `--session-id`,
+and `--run-id` flags always win over payload-derived values. When the payload
+exposes no session id, a stable project-scoped fallback (`<source>:<project-name>`)
+is used so unrelated sessions are not merged during sessionization.
 
 Events are stored in:
 
@@ -316,6 +325,113 @@ It records these Codex lifecycle events:
 
 After starting a new Codex session, run `/hooks` to review and trust the
 project-local hooks before they execute.
+
+## Agent Adapters
+
+Memory MCP is agent-agnostic. Each agent/runtime is treated as an adapter that
+normalizes its lifecycle payloads into one shared event contract
+(`event_type`, `source`, `project`, `session_id`, `run_id`, `payload`,
+`created_at`) written to `events.sqlite`. The `memory-mcp-event append` CLI is
+the stable ingestion boundary, and the operator workflow
+(`status` / `process` / `review`) is identical regardless of which agent
+produced the events.
+
+Adapters live in `src/memory_mcp/adapters/` and only translate inbound payloads;
+core storage, retrieval, and the review UI contain no agent-specific logic.
+
+### Codex setup
+
+1. Copy the hook config into your repo:
+
+   ```text
+   src/memory_mcp/hooks/examples/codex-hooks.json -> .codex/hooks.json
+   ```
+
+   The example uses `--adapter codex`, which reads `cwd`, `session_id`, and
+   `turn_id` from the piped Codex hook payload.
+
+2. Register the MCP server (see [`memory-mcp-server`](#memory-mcp-server)).
+3. Start a Codex session and run `/hooks` to trust the project-local hooks.
+
+### Claude Code setup
+
+1. Register the MCP server in Claude Code:
+
+   ```bash
+   claude mcp add memory-mcp \
+     --env MEMORY_MCP_ROOT="$(pwd)/.memory-mcp" \
+     -- uv --directory "$(pwd)" run memory-mcp-server
+   ```
+
+   This exposes `memory_search`, `memory_get`, `memory_create`, and
+   `memory_feedback` to Claude Code.
+
+   Alternatively, commit a project-scoped `.mcp.json` at the repo root:
+
+   ```json
+   {
+     "mcpServers": {
+       "memory-mcp": {
+         "command": "uv",
+         "args": ["--directory", "${CLAUDE_PROJECT_DIR}", "run", "memory-mcp-server"],
+         "env": {
+           "MEMORY_MCP_ROOT": "${CLAUDE_PROJECT_DIR}/.memory-mcp"
+         }
+       }
+     }
+   }
+   ```
+
+   > **Limitation — machine-specific paths.** Claude Code spawns MCP servers
+   > with a minimal environment, so it may not find `uv` on `PATH`, and
+   > `${CLAUDE_PROJECT_DIR}` is not always expanded during `.mcp.json`
+   > resolution. If the server fails to connect (for example
+   > `Failed to reconnect to memory-mcp: -32000`), replace `uv` and
+   > `${CLAUDE_PROJECT_DIR}` with absolute paths, for example
+   > `"command": "/Users/you/.local/bin/uv"` and
+   > `"--directory", "/abs/path/to/memory-plugin"`. Absolute paths are
+   > machine-specific, so prefer keeping a portable `.mcp.json` committed and
+   > overriding it locally (a git-ignored copy or `claude mcp add`) when your
+   > `uv` lives outside the default spawn `PATH`.
+
+2. Capture lifecycle events with hooks. Merge the example hook config into your
+   Claude Code settings (`.claude/settings.json`):
+
+   ```text
+   src/memory_mcp/hooks/examples/claude-code-hooks.json
+   ```
+
+   The commands use `--adapter claude`, which maps Claude Code's hook JSON
+   (`cwd`, `session_id`) into the normalized event model. Claude Code exposes no
+   per-turn id, so `run_id` is left unset and the session id carries grouping.
+   `$CLAUDE_PROJECT_DIR` resolves the project root.
+
+3. Run the normal operator workflow with the Claude extractor:
+
+   ```bash
+   uv run memory-mcp process --extractor claude --model sonnet
+   uv run memory-mcp review
+   ```
+
+### Generic MCP client setup
+
+Any MCP client can register `memory-mcp-server` using the configuration in the
+[`memory-mcp-server`](#memory-mcp-server) section. For event capture from a
+runtime without a dedicated adapter, append events through the `generic`
+adapter with an explicit source:
+
+```bash
+printf '{"cwd":"/repo","session_id":"abc"}' | uv run memory-mcp-event append \
+  --quiet \
+  --adapter generic \
+  --source my_runtime \
+  --event-type user_prompt
+```
+
+The `generic` adapter still reads common identifier keys (`cwd`/`project`,
+`session_id`/`thread_id`, `run_id`/`turn_id`) from the payload, and falls back
+to the current working directory and a project-scoped session id when they are
+absent.
 
 ### Pipeline Processing
 

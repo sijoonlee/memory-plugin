@@ -8,6 +8,7 @@ from memory_mcp.core.events import (
     MemoryCandidateCreate,
     SessionSegmentRecord,
 )
+from memory_mcp.core.models import MemoryCreate
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
 from memory_mcp.review.service import (
@@ -30,6 +31,39 @@ def _service(tmp_path) -> CandidateReviewService:
             memory_store=memory_store,
         ),
     )
+
+
+def test_review_service_lists_active_memories_readonly(tmp_path) -> None:
+    service = _service(tmp_path)
+    record = service.candidate_worker.memory_store.create_memory(
+        MemoryCreate(
+            what_happened="pytest used the wrong environment.",
+            when_useful="When running tests in this repo.",
+            helpful_explanation="Use uv run pytest.",
+            tags=["testing"],
+        )
+    )
+
+    memories = service.list_active_memories()
+    assert [memory.id for memory in memories] == [record.id]
+    assert memories[0].status == "active"
+
+    detail = service.get_memory_detail(record.id)
+    assert detail.id == record.id
+    assert detail.what_happened == "pytest used the wrong environment."
+
+    # The review service exposes no mutation path for active memories.
+    assert not hasattr(service, "update_memory")
+
+
+def test_review_service_get_memory_detail_missing(tmp_path) -> None:
+    service = _service(tmp_path)
+    try:
+        service.get_memory_detail("mem_does_not_exist")
+    except ValueError as exc:
+        assert "memory not found" in str(exc)
+    else:  # pragma: no cover - guard
+        raise AssertionError("expected ValueError for missing memory")
 
 
 def test_review_service_returns_candidate_with_evidence(tmp_path) -> None:

@@ -48,6 +48,17 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
             }
         )
 
+    async def list_memories(request: Request) -> Response:
+        memories = service.list_active_memories()
+        return _json(
+            {"memories": [memory.model_dump(mode="json") for memory in memories]}
+        )
+
+    async def get_memory(request: Request) -> Response:
+        memory_id = request.path_params["memory_id"]
+        memory = service.get_memory_detail(memory_id)
+        return _json({"memory": memory.model_dump(mode="json")})
+
     async def get_candidate(request: Request) -> Response:
         candidate_id = request.path_params["candidate_id"]
         include_segment_events = (
@@ -98,6 +109,12 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
             Route("/", index, methods=["GET"]),
             Route("/api/health", health, methods=["GET"]),
             Route("/api/candidates", _handle_errors(list_candidates), methods=["GET"]),
+            Route("/api/memories", _handle_errors(list_memories), methods=["GET"]),
+            Route(
+                "/api/memories/{memory_id}",
+                _handle_errors(get_memory),
+                methods=["GET"],
+            ),
             Route(
                 "/api/candidates/{candidate_id}",
                 _handle_errors(get_candidate),

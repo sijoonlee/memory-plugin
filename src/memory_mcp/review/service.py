@@ -84,6 +84,23 @@ class CandidateReviewService:
             if self._matches_filters(candidate, filters)
         ]
 
+    def list_active_memories(self) -> list[MemoryRecord]:
+        """Return active memories for read-only inspection in the review UI.
+
+        These come from the memory store (manual ``memory_create`` calls and
+        approved candidates) and are intentionally not editable here.
+        """
+
+        return self.candidate_worker.memory_store.list_memories(status="active")
+
+    def get_memory_detail(self, memory_id: str) -> MemoryRecord:
+        """Fetch one active memory by id for read-only display."""
+
+        memory = self.candidate_worker.memory_store.get_memory(memory_id)
+        if memory is None:
+            raise ValueError(f"memory not found: {memory_id}")
+        return memory
+
     def get_candidate_detail(
         self,
         candidate_id: str,

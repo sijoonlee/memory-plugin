@@ -13,8 +13,11 @@ filtersEl.addEventListener("submit", (event) => {
 });
 
 async function loadCandidates() {
-  setStatus("Loading candidates");
   const params = new URLSearchParams(new FormData(filtersEl));
+  if (params.get("status") === "active") {
+    return loadMemories();
+  }
+  setStatus("Loading candidates");
   for (const [key, value] of [...params.entries()]) {
     if (!value) params.delete(key);
   }
@@ -33,6 +36,61 @@ async function loadCandidates() {
     listEl.append(row);
   });
   setStatus(`${data.candidates.length} candidate${data.candidates.length === 1 ? "" : "s"}`);
+}
+
+async function loadMemories() {
+  setStatus("Loading active memories");
+  const data = await request("/api/memories");
+  listEl.innerHTML = "";
+  data.memories.forEach((memory) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `candidate-row ${memory.id === state.selectedId ? "active" : ""}`;
+    row.innerHTML = `
+      <div class="row-title">${escapeHtml(memory.what_happened)}</div>
+      <div class="row-meta">memory · score ${memory.score.toFixed(2)} · ${escapeHtml(memory.status)}</div>
+      <div class="row-meta">${escapeHtml(memory.when_useful)}</div>
+    `;
+    row.addEventListener("click", () => selectMemory(memory.id));
+    listEl.append(row);
+  });
+  const count = data.memories.length;
+  setStatus(`${count} active memor${count === 1 ? "y" : "ies"}`);
+}
+
+async function selectMemory(memoryId) {
+  state.selectedId = memoryId;
+  const data = await request(`/api/memories/${memoryId}`);
+  renderMemoryDetail(data.memory);
+  loadMemories();
+}
+
+function renderMemoryDetail(memory) {
+  detailEl.innerHTML = `
+    <div class="detail-grid">
+      <div class="panel">
+        <h2>Active Memory (read-only)</h2>
+        ${readonlyField("When Useful", memory.when_useful)}
+        ${readonlyField("What Happened", memory.what_happened)}
+        ${readonlyField("Helpful Explanation", memory.helpful_explanation)}
+        ${readonlyField("Tags", (memory.tags || []).join(", "))}
+        <div class="meta">Edits are disabled for active memories.</div>
+      </div>
+      <div class="panel">
+        <h2>Stats</h2>
+        <div class="meta">${escapeHtml(memory.id)}</div>
+        <div class="meta">status: ${escapeHtml(memory.status)}</div>
+        <div class="meta">score: ${memory.score.toFixed(3)} · confidence: ${memory.confidence.toFixed(2)}</div>
+        <div class="meta">retrieved: ${memory.retrieval_count} · used: ${memory.use_count}</div>
+        <div class="meta">feedback: +${memory.positive_feedback_count} / -${memory.negative_feedback_count}</div>
+        <div class="evidence"><pre>${escapeHtml(JSON.stringify(memory.source, null, 2))}</pre></div>
+      </div>
+    </div>
+  `;
+}
+
+function readonlyField(label, value) {
+  return `<label>${label}<textarea readonly>${escapeHtml(value || "")}</textarea></label>`;
 }
 
 async function selectCandidate(candidateId, includeSegmentEvents = false) {
