@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Memory Candidate Review</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Memory Candidate Review</h1>
+      <div class="status" id="status">Loading</div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <form id="filters" class="filters">
+          <label>
+            Status
+            <select name="status">
+              <option value="pending_review">Pending</option>
+              <option value="">All</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="merged">Merged</option>
+            </select>
+          </label>
+          <label>
+            Project
+            <input name="project" autocomplete="off">
+          </label>
+          <label>
+            Category
+            <input name="category" autocomplete="off">
+          </label>
+          <label>
+            Min Confidence
+            <input name="min_confidence" type="number" min="0" max="1" step="0.05">
+          </label>
+          <button type="submit">Refresh</button>
+        </form>
+        <div id="candidateList" class="candidate-list"></div>
+      </aside>
+
+      <section class="detail" id="detail">
+        <div class="empty">Select a candidate.</div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

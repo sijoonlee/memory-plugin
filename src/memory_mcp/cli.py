@@ -4,9 +4,9 @@ from pathlib import Path
 
 import typer
 
-from memory_mcp.embeddings import LangChainHuggingFaceEmbedder
-from memory_mcp.models import MemoryCreate
-from memory_mcp.store import LocalMemoryStore
+from memory_mcp.core.embeddings import LangChainHuggingFaceEmbedder
+from memory_mcp.core.models import MemoryCreate
+from memory_mcp.core.store import LocalMemoryStore
 
 app = typer.Typer(no_args_is_help=True)
 

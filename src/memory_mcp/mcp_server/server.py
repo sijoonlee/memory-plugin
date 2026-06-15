@@ -6,14 +6,15 @@ from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 
-from memory_mcp.embeddings import LangChainHuggingFaceEmbedder
-from memory_mcp.service import (
+from memory_mcp.core.embeddings import LangChainHuggingFaceEmbedder
+from memory_mcp.core.events import EventStore
+from memory_mcp.mcp_server.service import (
     memory_create as create_memory_tool,
     memory_feedback as feedback_memory_tool,
     memory_get as get_memory_tool,
     memory_search as search_memory_tool,
 )
-from memory_mcp.store import LocalMemoryStore
+from memory_mcp.core.store import LocalMemoryStore
 
 
 def build_store(root: Path | None = None) -> LocalMemoryStore:
@@ -24,12 +25,29 @@ def build_store(root: Path | None = None) -> LocalMemoryStore:
     )
 
 
-def build_mcp(store: LocalMemoryStore | None = None) -> FastMCP:
+def build_event_store(root: Path | None = None) -> EventStore:
+    store_root = root or Path(os.environ.get("MEMORY_MCP_ROOT", ".memory-mcp"))
+    return EventStore(root=store_root)
+
+
+def build_mcp(
+    store: LocalMemoryStore | None = None,
+    event_store: EventStore | None = None,
+) -> FastMCP:
     memory_store = store or build_store()
+    events = event_store or EventStore(memory_store.root)
     mcp = FastMCP(
         "memory-mcp",
         instructions=(
-            "Retrieve and manage compact reusable memories about prior work."
+            "Retrieve and manage compact reusable memories about prior work. "
+            "Use memory_search when prior project context may help the current task. "
+            "After memory_search, call memory_feedback only for memories you actually "
+            "considered. Use signal='used' when a memory changed your plan, command, "
+            "edit, or answer. Use signal='helpful' when the memory clearly improved "
+            "the result or the user confirmed it. Use signal='not_helpful' when a "
+            "relevant-looking memory did not help. Use signal='stale', 'incorrect', "
+            "or 'contradicted' when the memory should be demoted or retired. Do not "
+            "send feedback for every returned memory automatically."
         ),
     )
 
@@ -48,6 +66,7 @@ def build_mcp(store: LocalMemoryStore | None = None) -> FastMCP:
             limit=limit,
             tags=tags,
             min_score=min_score,
+            event_store=events,
         )
 
     @mcp.tool()
@@ -90,7 +109,7 @@ def build_mcp(store: LocalMemoryStore | None = None) -> FastMCP:
         weight: float = 1.0,
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Record feedback about whether a memory was used or helpful."""
+        """Record sparse feedback for a memory that was actually considered."""
 
         return feedback_memory_tool(
             memory_store,
@@ -98,6 +117,7 @@ def build_mcp(store: LocalMemoryStore | None = None) -> FastMCP:
             signal=signal,
             weight=weight,
             context=context,
+            event_store=events,
         )
 
     return mcp

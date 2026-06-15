@@ -7,15 +7,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from memory_mcp.content import build_content_for_embedding
-from memory_mcp.embeddings import Embedder
-from memory_mcp.models import (
+from memory_mcp.core.content import build_content_for_embedding
+from memory_mcp.core.embeddings import Embedder
+from memory_mcp.core.models import (
     MemoryCreate,
     MemoryFeedback,
     MemoryFeedbackSignal,
     MemoryRecord,
     MemorySearchResult,
 )
+
+CLEAR_DUPLICATE_SEMANTIC_THRESHOLD = 0.92
+POSSIBLE_DUPLICATE_SEMANTIC_THRESHOLD = 0.82
 
 
 class LocalMemoryStore:
@@ -29,38 +32,37 @@ class LocalMemoryStore:
         self._init_sqlite()
 
     def create_memory(self, memory: MemoryCreate) -> MemoryRecord:
+        content_for_embedding = build_content_for_embedding(
+            what_happened=memory.what_happened,
+            when_useful=memory.when_useful,
+            helpful_explanation=memory.helpful_explanation,
+            tags=memory.tags,
+        )
+        vector = self.embedder.embed_text(content_for_embedding)
+        dedupe_match = self._find_dedupe_match(memory, vector)
+        if dedupe_match is not None:
+            matched_record, decision, similarity = dedupe_match
+            if decision == "duplicate":
+                return self._merge_duplicate_memory(
+                    existing=matched_record,
+                    candidate=memory,
+                    similarity=similarity,
+                )
+            if decision == "possible_duplicate":
+                return self._create_rejected_duplicate_candidate(
+                    memory=memory,
+                    content_for_embedding=content_for_embedding,
+                    vector=vector,
+                    existing=matched_record,
+                    similarity=similarity,
+                )
+
         record = MemoryRecord(
             id=f"mem_{uuid.uuid4().hex}",
-            content_for_embedding=build_content_for_embedding(
-                what_happened=memory.what_happened,
-                when_useful=memory.when_useful,
-                helpful_explanation=memory.helpful_explanation,
-                tags=memory.tags,
-            ),
+            content_for_embedding=content_for_embedding,
             **memory.model_dump(),
         )
-        vector = self.embedder.embed_text(record.content_for_embedding)
-        with self._connect_sqlite() as conn:
-            conn.execute(
-                """
-                INSERT INTO memories (
-                    id, record_json, content_for_embedding, tags_json, score,
-                    confidence, status, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.id,
-                    record.model_dump_json(),
-                    record.content_for_embedding,
-                    json.dumps(record.tags),
-                    record.score,
-                    record.confidence,
-                    record.status,
-                    _dt_to_text(record.created_at),
-                    _dt_to_text(record.updated_at),
-                ),
-            )
+        self._insert_memory_record(record)
         self._add_vector(record, vector)
         return record
 
@@ -133,6 +135,21 @@ class LocalMemoryStore:
                 count += 1
         return count
 
+    def list_memories(self, *, status: str | None = None) -> list[MemoryRecord]:
+        query = "SELECT record_json FROM memories"
+        params: tuple[Any, ...] = ()
+        if status is not None:
+            query += " WHERE status = ?"
+            params = (status,)
+        query += " ORDER BY created_at, id"
+        with self._connect_sqlite() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [MemoryRecord.model_validate_json(row["record_json"]) for row in rows]
+
+    def update_memory(self, record: MemoryRecord) -> None:
+        with self._connect_sqlite() as conn:
+            self._write_memory_record(conn, record)
+
     def record_feedback(self, feedback: MemoryFeedback) -> MemoryRecord | None:
         record = self.get_memory(feedback.memory_id)
         if record is None:
@@ -159,7 +176,13 @@ class LocalMemoryStore:
         if feedback.signal == "stale":
             update["status"] = "stale"
         elif feedback.signal == "contradicted":
-            update["status"] = "superseded"
+            update["status"] = (
+                "superseded"
+                if feedback.context.get("replacement_memory_id")
+                else "stale"
+            )
+        elif feedback.signal == "incorrect":
+            update["status"] = "invalid"
 
         updated = record.model_copy(update=update)
         with self._connect_sqlite() as conn:
@@ -220,6 +243,39 @@ class LocalMemoryStore:
                 ON feedback_events(memory_id)
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS daemon_checkpoints (
+                    name TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+
+    def get_checkpoint(self, name: str) -> str | None:
+        with self._connect_sqlite() as conn:
+            row = conn.execute(
+                "SELECT value FROM daemon_checkpoints WHERE name = ?",
+                (name,),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["value"])
+
+    def set_checkpoint(self, name: str, value: str) -> None:
+        now = datetime.now(timezone.utc)
+        with self._connect_sqlite() as conn:
+            conn.execute(
+                """
+                INSERT INTO daemon_checkpoints (name, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (name, value, _dt_to_text(now)),
+            )
 
     def _connect_sqlite(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.sqlite_path)
@@ -253,6 +309,122 @@ class LocalMemoryStore:
             db.create_table("memories", data=[row])
             return
         db.open_table("memories").add([row])
+
+    def _insert_memory_record(self, record: MemoryRecord) -> None:
+        with self._connect_sqlite() as conn:
+            conn.execute(
+                """
+                INSERT INTO memories (
+                    id, record_json, content_for_embedding, tags_json, score,
+                    confidence, status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.id,
+                    record.model_dump_json(),
+                    record.content_for_embedding,
+                    json.dumps(record.tags),
+                    record.score,
+                    record.confidence,
+                    record.status,
+                    _dt_to_text(record.created_at),
+                    _dt_to_text(record.updated_at),
+                ),
+            )
+
+    def _find_dedupe_match(
+        self,
+        candidate: MemoryCreate,
+        candidate_vector: list[float],
+    ) -> tuple[MemoryRecord, str, float] | None:
+        if not self._vector_table_exists():
+            return None
+
+        table = self._open_vector_table()
+        raw_results = table.search(candidate_vector).limit(5).to_list()
+        best_possible: tuple[MemoryRecord, str, float] | None = None
+        for raw in raw_results:
+            record = self.get_memory(raw["id"])
+            if record is None or record.status != "active":
+                continue
+
+            semantic_similarity = _distance_to_similarity(raw.get("_distance", 0.0))
+            field_match = _dedupe_field_match(candidate, record)
+            if (
+                semantic_similarity >= CLEAR_DUPLICATE_SEMANTIC_THRESHOLD
+                and field_match == "duplicate"
+            ):
+                return (record, "duplicate", semantic_similarity)
+            if (
+                semantic_similarity >= POSSIBLE_DUPLICATE_SEMANTIC_THRESHOLD
+                and field_match == "possible_duplicate"
+                and best_possible is None
+            ):
+                best_possible = (record, "possible_duplicate", semantic_similarity)
+
+        return best_possible
+
+    def _merge_duplicate_memory(
+        self,
+        *,
+        existing: MemoryRecord,
+        candidate: MemoryCreate,
+        similarity: float,
+    ) -> MemoryRecord:
+        now = datetime.now(timezone.utc)
+        source = existing.source.model_copy(deep=True)
+        dedupe = dict(source.extra.get("dedupe", {}))
+        dedupe["decision"] = "merged_duplicate"
+        dedupe["duplicate_count"] = int(dedupe.get("duplicate_count", 0)) + 1
+        dedupe["last_similarity"] = similarity
+        dedupe["last_candidate"] = {
+            "what_happened": candidate.what_happened,
+            "when_useful": candidate.when_useful,
+            "helpful_explanation": candidate.helpful_explanation,
+            "tags": candidate.tags,
+            "source": candidate.source.model_dump(mode="json"),
+        }
+        source.extra["dedupe"] = dedupe
+
+        updated = existing.model_copy(
+            update={
+                "tags": sorted(set(existing.tags).union(candidate.tags)),
+                "confidence": max(existing.confidence, candidate.confidence),
+                "score": max(existing.score, candidate.score),
+                "source": source,
+                "updated_at": now,
+            }
+        )
+        self.update_memory(updated)
+        return updated
+
+    def _create_rejected_duplicate_candidate(
+        self,
+        *,
+        memory: MemoryCreate,
+        content_for_embedding: str,
+        vector: list[float],
+        existing: MemoryRecord,
+        similarity: float,
+    ) -> MemoryRecord:
+        source = memory.source.model_copy(deep=True)
+        source.extra["dedupe"] = {
+            "decision": "possible_duplicate_rejected",
+            "existing_memory_id": existing.id,
+            "similarity": similarity,
+            "reason": "Candidate is similar to an existing active memory.",
+        }
+        record = MemoryRecord(
+            id=f"mem_{uuid.uuid4().hex}",
+            content_for_embedding=content_for_embedding,
+            status="rejected",
+            source=source,
+            **memory.model_dump(exclude={"source"}),
+        )
+        self._insert_memory_record(record)
+        self._add_vector(record, vector)
+        return record
 
     def _table_names(self, db: Any) -> list[str]:
         if hasattr(db, "list_tables"):
@@ -355,3 +527,54 @@ def _feedback_score_delta(signal: MemoryFeedbackSignal) -> float:
 
 def _clamp_score(score: float) -> float:
     return max(0.0, min(score, 1.0))
+
+
+def _dedupe_field_match(candidate: MemoryCreate, existing: MemoryRecord) -> str:
+    lesson_similarity = _token_jaccard(
+        candidate.what_happened,
+        existing.what_happened,
+    )
+    situation_similarity = _token_jaccard(candidate.when_useful, existing.when_useful)
+    action_similarity = _token_jaccard(
+        candidate.helpful_explanation,
+        existing.helpful_explanation,
+    )
+    tag_overlap = bool(set(candidate.tags).intersection(existing.tags))
+
+    if (
+        lesson_similarity >= 0.70
+        and situation_similarity >= 0.80
+        and action_similarity >= 0.80
+    ):
+        return "duplicate"
+    if (
+        lesson_similarity >= 0.35
+        and situation_similarity >= 0.60
+        and (action_similarity >= 0.60 or tag_overlap)
+    ):
+        return "possible_duplicate"
+    return "distinct"
+
+
+def _token_jaccard(left: str, right: str) -> float:
+    left_tokens = _tokens(left)
+    right_tokens = _tokens(right)
+    if not left_tokens and not right_tokens:
+        return 1.0
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens.intersection(right_tokens)) / len(
+        left_tokens.union(right_tokens)
+    )
+
+
+def _tokens(text: str) -> set[str]:
+    normalized = []
+    for char in text.lower():
+        normalized.append(char if char.isalnum() else " ")
+    stop_words = {"a", "an", "and", "or", "the", "to", "of", "in", "this"}
+    return {
+        token
+        for token in "".join(normalized).split()
+        if token and token not in stop_words
+    }

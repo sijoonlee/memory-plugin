@@ -32,6 +32,50 @@ Hook / Event Logs
       -> pruning / decay worker
 ```
 
+## Package Layout
+
+```text
+src/memory_mcp/
+  core/
+    models.py
+    content.py
+    embeddings.py
+    store.py
+    events.py
+
+  mcp_server/
+    server.py
+    service.py
+
+  review/
+    service.py
+    server.py
+    static/
+    cli.py
+
+  hooks/
+    cli.py
+    examples/
+
+  daemon/
+    processor.py
+    scoring.py
+    workers/
+      event_worker.py
+      session_worker.py
+      candidate_worker.py
+      decay_worker.py
+    cli.py
+```
+
+Runtime surfaces should stay separate:
+
+- `hooks` catches moments and appends normalized events.
+- `daemon` consumes events and updates or creates memories.
+- `mcp_server` exposes memory tools to agents.
+- `review` exposes local human review for memory candidates.
+- `core` owns shared storage, models, embeddings, and event schema.
+
 ## Memory Model
 
 A memory should be a compact reusable lesson, not a raw transcript.
@@ -405,6 +449,7 @@ Track statuses:
 active
 stale
 superseded
+invalid
 rejected
 archived
 ```
@@ -552,7 +597,7 @@ Daemon capture loop:
 3. Group events by project, session, run, and task.
 4. Build candidate lessons from explicit remember requests, user corrections,
    failed commands followed by fixes, repeated patterns, and final outcomes.
-5. Run redaction.
+5. Run redaction once the redaction milestone is implemented.
 6. Run quality gates.
 7. Search similar memories for dedupe or contradiction.
 8. Create, update, reject, or mark pending review.
@@ -618,30 +663,223 @@ Daemon outputs:
 - expose `memory_feedback`
 - verify with a simple MCP client
 
-### Milestone 3: Event Log And Daemon
+### Milestone 3A: Event Producers And Hooks
 
+- add `events.sqlite`
+- add normalized event model
+- add event append API / CLI
 - write retrieval and feedback events
 - write hook events for user prompts, tool results, and turn stops
+- add hook-friendly JSON stdin appender
+- add Codex hook example config
+
+### Milestone 3B: Event Processing Daemon
+
 - daemon consumes unprocessed events
-- daemon proposes memory candidates from explicit remember requests and user corrections
-- update score counters
+- update score counters from `memory_feedback`
+- apply weak score signal from `memory_retrieved`
 - add daily decay
+- mark events processed or failed
+- add daemon `once`, `run`, and `status` commands
+- later: daemon proposes memory candidates from explicit remember requests and user corrections
 
 ### Milestone 4: Quality Controls
 
-- dedupe on create
-- redaction pass
-- memory status field
-- basic stale/incorrect handling
-- pending review status for inferred daemon candidates
-- optional watcher for `$CODEX_HOME/memories/` imports
+#### Milestone 4A: Memory Status And Feedback Semantics
 
-### Milestone 5: Evals
+- formalize status transitions: `active`, `stale`, `superseded`, `invalid`, `rejected`, `archived`
+- define status meanings:
+  - `active`: normal searchable memory
+  - `stale`: likely outdated, but no clear replacement is known yet
+  - `superseded`: replaced by a newer memory or rule; keep for audit but exclude from normal search
+  - `invalid`: previously active memory was later found to be wrong
+  - `rejected`: candidate was reviewed and should not become an active memory
+  - `archived`: intentionally hidden or retired for cleanup, policy, or manual organization
+- keep feedback signals separate from memory statuses:
+  - `not_helpful`: keep `active`, lower score
+  - `stale`: set status to `stale`
+  - `contradicted`: set status to `superseded` if a replacement memory is known, otherwise `stale`
+  - `incorrect`: set status to `invalid`
+- make `incorrect`, `stale`, and `contradicted` feedback update status consistently through this mapping
+- exclude non-active memories from normal search results
+- add CLI/MCP support for fetching archived or stale memories by id for audit
+- add tests for each feedback-driven status transition
 
-- retrieval relevance tests
-- score update tests
-- dedupe tests
-- MCP tool contract tests
+#### Milestone 4B: Dedupe On Memory Creation
+
+- build candidate retrieval text before memory creation
+- search similar existing memories before create
+- classify matches as duplicate, possible duplicate, or new memory
+- for clear duplicates, return or update the existing memory instead of creating a new one
+- for possible duplicates, reject with explanation for V1; later route to `pending_review` after 4C exists
+- record dedupe decision metadata for audit
+- add tests for duplicate, near-duplicate, and distinct-memory cases
+
+#### Milestone 4C: Sessionization And Candidate Queue
+
+- [x] split daemon responsibilities into workers with different schedules:
+  - event worker: fast polling for `memory_feedback` and `memory_retrieved`
+  - session worker: slower polling to identify idle sessions
+  - candidate worker: delayed candidate extraction after session idle
+  - decay worker: daily score decay
+- [x] add session tracking derived from events:
+  - project
+  - session id
+  - first event time
+  - last event time
+  - status: `open`, `idle`, `processed`, `skipped`, `failed`
+- [x] only process candidate extraction after an idle threshold, for example no new events for 10 minutes
+- [x] add a pending candidate table separate from active memories
+- [x] store candidate fields, evidence event ids, confidence, creation reason, status, and rejection reason
+- [x] add CLI commands to list, inspect, approve, reject, or retry pending candidates
+- [x] approving a candidate runs the same dedupe-on-create path
+- [x] rejecting a candidate stores the rejection reason
+- [x] add tests for session idle detection and candidate lifecycle
+
+Note: the first 4C implementation derives segments by scanning all events. That is
+acceptable for the MVP data model. A later scale milestone replaces full-table
+session refresh with incremental CDC-style sessionization.
+
+#### Milestone 4D: LLM Memory Candidate Extractor
+
+- [x] add an extractor interface so the daemon can use a fake extractor in tests and a Codex CLI extractor in runtime
+- [x] use Codex CLI for the MVP extractor instead of an SDK integration
+- [x] implement `CodexCliExtractor` as a narrow adapter around `codex exec`
+- [x] use `codex exec` non-interactively:
+  - pass the extraction prompt through stdin, or use `-` as the prompt argument
+  - run with `--ephemeral` so extraction sessions are not persisted as normal user sessions
+  - run with `--sandbox read-only` because extraction should inspect provided logs only
+  - use `--cd <project>` when project context is useful
+  - use `--output-schema <schema-file>` to request strict structured output
+  - use `--output-last-message <file>` so the daemon can parse the final JSON from a file
+  - optionally use `--json` only for daemon diagnostics; do not parse human text logs as the contract
+- [x] keep the CLI command construction isolated so a later SDK extractor can replace it without changing daemon flow
+- [x] add timeout, exit-code, stderr, and invalid-JSON handling around the Codex CLI process
+- [x] run extraction only for idle sessions from 4C, never for active sessions
+- [x] extract memory candidates directly from session events; do not persist generic summaries unless candidates exist
+- [x] define memory categories:
+  - `clue_location`: where the useful code/config/document clue was found after search
+  - `external_context`: human-provided context that filled a knowledge gap
+  - `user_correction`: durable correction to an agent assumption or behavior
+  - `durable_workflow`: project-specific command, workflow, or convention
+  - `repeated_pitfall`: mistake or trap likely to recur
+- [x] require structured output:
+  - situation
+  - lesson
+  - action
+  - category
+  - confidence
+  - evidence event ids
+  - evidence summary
+  - no-memory reason when no candidate exists
+- [x] store extracted lessons as pending candidates, not active memories by default
+- [x] MVP rule: daemon/LLM-generated candidates require explicit human approval before becoming active memories
+- [x] skip candidate creation when the session has no reusable lesson
+- [x] add fixture-based tests for should-create and should-not-create cases
+
+### Milestone 5A: Candidate Review Service And Basic Local UI
+
+Status: complete.
+
+- add a `CandidateReviewService` so CLI and UI share review logic instead of duplicating store calls
+- provide a basic local-only human review surface for pending memory candidates
+- bind any HTTP UI to `127.0.0.1` by default
+- show candidate fields:
+  - situation
+  - lesson
+  - action
+  - category
+  - confidence
+  - evidence summary
+  - evidence event ids
+  - source session/segment
+  - dedupe match or possible duplicate metadata
+- support actions:
+  - approve
+  - edit then approve
+  - reject with reason
+  - retry extraction for a failed/skipped session
+- approval runs the same dedupe-on-create path before creating active memory
+- rejection preserves audit metadata and reason
+- show referenced evidence events by default, not the full session segment
+- make raw event payloads expandable or opt-in
+- skip display redaction for this local-only MVP; redaction remains in the dedicated later milestone
+- filter by project, status, category, confidence, and created date
+- start with CLI review commands from 4C; build dashboard when candidate volume makes CLI review painful
+
+### Milestone 6: Evals
+
+Status: complete.
+
+- [x] retrieval relevance tests
+- [x] score update tests
+- [x] dedupe tests
+- [x] MCP tool contract tests
+- [x] LLM candidate extraction evals for good memory vs no-memory sessions
+- [x] candidate approval/rejection workflow tests
+
+### Milestone 7: Redaction And Secret Safety
+
+- add core redaction module for text and nested JSON-like payloads
+- redact hook/event payloads before writing `events.sqlite`
+- redact explicit `memory_create` fields before embedding or storage
+- redact daemon-created memory candidates before quality gates
+- reject high-risk candidates such as private key blocks or empty-after-redaction memories
+- store redaction metadata in memory source metadata and event payload metadata
+- add tests for API keys, bearer tokens, private keys, password fields, and nested payloads
+- support deleting memories by id
+
+### Milestone 8: Incremental Event CDC For Sessionization
+
+- stop using full-table event scans for normal session refresh
+- add a sessionization checkpoint, for example `session_worker_last_event_created_at`
+  plus a tie-breaker event id
+- process only events newer than the checkpoint in normal daemon runs
+- maintain session aggregate rows incrementally as events arrive:
+  - project
+  - session id
+  - current segment id
+  - current segment index
+  - first event time
+  - last event time
+  - event count
+  - status
+- split a segment when the new event gap exceeds `max_segment_gap`
+- mark existing open segments idle with a targeted query on `last_event_at`, not by
+  rescanning all events
+- keep a manual backfill command for migrations and repair, but make it explicit:
+  `memory-mcp-daemon sessions rebuild`
+- make `sessions refresh` incremental, or rename it to `sessions catch-up`
+- add tests proving:
+  - the second refresh reads only new events
+  - same timestamp events are handled by event id tie-breaker
+  - long gaps create new segments
+  - idle marking does not require scanning event payloads
+
+### Milestone 9: Candidate Merge And Rich Dashboard Workflow
+
+- support merging related candidates across segments
+- merge flow preserves:
+  - evidence event ids
+  - source segment ids
+  - source candidate ids
+- merged candidates can be edited before approval
+- original candidates are marked `merged` with `merged_into_candidate_id`
+- keep merge human-gated:
+  - manual merge first
+  - later LLM-assisted merge proposals can create a new `pending_review` candidate
+  - LLM proposals should not directly create or modify active memories
+- support archive action for candidates that should be hidden but retained for audit
+- show dedupe match details and possible duplicate metadata more prominently
+- add batch review workflow for high candidate volume
+- add richer filters and sorting:
+  - project
+  - status
+  - category
+  - confidence
+  - created date
+  - source session/segment
+- keep raw full-segment display opt-in because hook logs can be noisy or sensitive
 
 ## Non-Goals For V1
 
@@ -676,7 +914,7 @@ Daemon outputs:
 ## Suggested V1 Defaults
 
 - Scope memories by project.
-- Allow explicit `memory_create`, but run redaction and dedupe first.
+- Allow explicit `memory_create`, but run redaction before storage and dedupe before create.
 - Let the daemon create memories for explicit remember requests and clear user corrections.
 - Mark inferred daemon candidates as `pending_review` before they become active.
 - Treat `retrieved` as weak signal only.

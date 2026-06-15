@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+from typing import Any
+
+from memory_mcp.core.events import EventCreate, EventStore
+from memory_mcp.core.models import MemoryCreate, MemoryFeedback, MemorySource
+from memory_mcp.core.store import LocalMemoryStore
+
+
+def memory_search(
+    store: LocalMemoryStore,
+    query: str,
+    limit: int = 5,
+    tags: list[str] | None = None,
+    min_score: float = 0.0,
+    event_store: EventStore | None = None,
+    event_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    results = store.search_memories(
+        query,
+        limit=limit,
+        tags=tags,
+        min_score=min_score,
+    )
+    response = {
+        "memories": [
+            {
+                "id": result.memory.id,
+                "what_happened": result.memory.what_happened,
+                "when_useful": result.memory.when_useful,
+                "helpful_explanation": result.memory.helpful_explanation,
+                "tags": result.memory.tags,
+                "score": result.memory.score,
+                "confidence": result.memory.confidence,
+                "semantic_similarity": result.semantic_similarity,
+                "final_score": result.final_score,
+                "retrieval_reason": result.retrieval_reason,
+            }
+            for result in results
+        ],
+        "feedback_guidance": (
+            "Call memory_feedback only for memories you actually considered. "
+            "Use signal='used' if a memory changed your behavior. Use 'helpful' "
+            "if it clearly improved the result or the user confirmed it. Use "
+            "'not_helpful' if it looked relevant but did not help. Use 'stale', "
+            "'incorrect', or 'contradicted' when the memory should be demoted or retired. "
+            "Do not send feedback for every returned memory automatically."
+        ),
+    }
+    if event_store is not None:
+        _append_event(
+            event_store,
+            EventCreate(
+                event_type="memory_retrieved",
+                source="mcp_tool",
+                project=_context_value(event_context, "project"),
+                session_id=_context_value(event_context, "session_id"),
+                run_id=_context_value(event_context, "run_id"),
+                payload={
+                    "query": query,
+                    "limit": limit,
+                    "tags": tags or [],
+                    "min_score": min_score,
+                    "memory_ids": [item["id"] for item in response["memories"]],
+                    "result_count": len(response["memories"]),
+                },
+            ),
+        )
+    return response
+
+
+def memory_get(store: LocalMemoryStore, memory_id: str) -> dict[str, Any]:
+    record = store.get_memory(memory_id)
+    if record is None:
+        return {"memory": None}
+    return {"memory": record.model_dump(mode="json")}
+
+
+def memory_create(
+    store: LocalMemoryStore,
+    what_happened: str,
+    when_useful: str,
+    helpful_explanation: str,
+    tags: list[str] | None = None,
+    source: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    record = store.create_memory(
+        MemoryCreate(
+            what_happened=what_happened,
+            when_useful=when_useful,
+            helpful_explanation=helpful_explanation,
+            tags=tags or [],
+            source=MemorySource.model_validate(source or {"kind": "manual"}),
+        )
+    )
+    return {"memory": record.model_dump(mode="json")}
+
+
+def memory_feedback(
+    store: LocalMemoryStore,
+    memory_id: str,
+    signal: str,
+    weight: float = 1.0,
+    context: dict[str, Any] | None = None,
+    event_store: EventStore | None = None,
+) -> dict[str, Any]:
+    updated = store.record_feedback(
+        MemoryFeedback(
+            memory_id=memory_id,
+            signal=signal,  # type: ignore[arg-type]
+            weight=weight,
+            context=context or {},
+        )
+    )
+    if updated is None:
+        response = {"ok": False, "memory": None, "error": "memory_not_found"}
+    else:
+        response = {"ok": True, "memory": updated.model_dump(mode="json")}
+    if event_store is not None:
+        _append_event(
+            event_store,
+            EventCreate(
+                event_type="memory_feedback",
+                source="mcp_tool",
+                project=_context_value(context, "project"),
+                session_id=_context_value(context, "session_id"),
+                run_id=_context_value(context, "run_id"),
+                payload={
+                    "memory_id": memory_id,
+                    "signal": signal,
+                    "weight": weight,
+                    "context": context or {},
+                    "ok": response["ok"],
+                    "error": response.get("error"),
+                    "already_applied": response["ok"],
+                },
+            ),
+        )
+    return response
+
+
+def _context_value(context: dict[str, Any] | None, key: str) -> str | None:
+    if context is None:
+        return None
+    value = context.get(key)
+    if value is None:
+        return None
+    return str(value)
+
+
+def _append_event(event_store: EventStore, event: EventCreate) -> None:
+    event_store.append_event(event)

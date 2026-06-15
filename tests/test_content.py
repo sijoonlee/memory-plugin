@@ -1,4 +1,4 @@
-from memory_mcp.content import build_content_for_embedding
+from memory_mcp.core.content import build_content_for_embedding
 
 
 def test_build_content_for_embedding_includes_main_fields() -> None:

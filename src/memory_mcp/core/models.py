@@ -6,7 +6,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-MemoryStatus = Literal["active", "stale", "superseded", "rejected", "archived"]
+MemoryStatus = Literal[
+    "active",
+    "stale",
+    "superseded",
+    "invalid",
+    "rejected",
+    "archived",
+]
 MemoryFeedbackSignal = Literal[
     "retrieved",
     "used",
