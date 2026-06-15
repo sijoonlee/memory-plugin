@@ -9,7 +9,7 @@ from memory_mcp.core.events import (
     SessionSegmentRecord,
 )
 from memory_mcp.core.store import LocalMemoryStore
-from memory_mcp.daemon.workers.candidate_worker import CandidateWorker
+from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
 from memory_mcp.review.service import (
     CandidateFilters,
     CandidateReviewService,

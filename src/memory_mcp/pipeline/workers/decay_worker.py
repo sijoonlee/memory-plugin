@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from memory_mcp.core.store import LocalMemoryStore
-from memory_mcp.daemon.scoring import apply_daily_decay
+from memory_mcp.pipeline.scoring import apply_daily_decay
 
 
 DAILY_DECAY_CHECKPOINT = "daily_decay_date"

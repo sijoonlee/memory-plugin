@@ -3,13 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from memory_mcp.core.events import EventCreate, EventStore
-from memory_mcp.daemon.extractors import (
+from memory_mcp.pipeline.extractors import (
     ExtractedMemoryCandidate,
     ExtractionResult,
     StaticMemoryExtractor,
 )
-from memory_mcp.daemon.workers.extraction_worker import ExtractionWorker
-from memory_mcp.daemon.workers.session_worker import SessionWorker
+from memory_mcp.pipeline.workers.extraction_worker import ExtractionWorker
+from memory_mcp.pipeline.workers.session_worker import SessionWorker
 
 
 def test_extraction_schema_forbids_additional_properties() -> None:

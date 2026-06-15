@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import typer
@@ -7,6 +8,9 @@ import typer
 from memory_mcp.core.embeddings import LangChainHuggingFaceEmbedder
 from memory_mcp.core.models import MemoryCreate
 from memory_mcp.core.store import LocalMemoryStore
+from memory_mcp.pipeline.extractors import CodexCliExtractor
+from memory_mcp.operator import OperatorWorkflow
+from memory_mcp.review.server import create_app
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -91,3 +95,69 @@ def install_model(
     embedder = LangChainHuggingFaceEmbedder(model_name=model_name)
     vector = embedder.embed_text("memory mcp embedding model warmup")
     typer.echo(f"installed {model_name} ({len(vector)} dimensions)")
+
+
+@app.command("status")
+def operator_status(
+    root: Path = typer.Option(Path(".memory-mcp")),
+) -> None:
+    status = OperatorWorkflow(root=root).status()
+    typer.echo(json.dumps(status.to_dict(), indent=2))
+
+
+@app.command("process")
+def operator_process(
+    root: Path = typer.Option(Path(".memory-mcp")),
+    event_limit: int = typer.Option(100, min=1, help="Maximum pending events to process."),
+    extraction_limit: int = typer.Option(
+        1,
+        min=0,
+        help="Maximum idle session segments to send to extraction. Use 0 to skip.",
+    ),
+    idle_after: int = typer.Option(
+        600,
+        min=0,
+        help="Seconds with no events before a segment is considered idle.",
+    ),
+    max_gap: int = typer.Option(
+        7200,
+        min=1,
+        help="Seconds between events before a new segment starts.",
+    ),
+    decay: bool = typer.Option(True, "--decay/--no-decay"),
+    codex_bin: str = typer.Option("codex", help="Codex CLI executable for extraction."),
+    model: str | None = typer.Option(None, help="Optional Codex model override."),
+    timeout: int = typer.Option(180, min=1, help="Codex CLI timeout in seconds."),
+    project_context: bool = typer.Option(
+        False,
+        help="Run Codex with --cd set to the segment project. Off by default to avoid hooks.",
+    ),
+) -> None:
+    extractor = None
+    if extraction_limit > 0:
+        extractor = CodexCliExtractor(
+            codex_bin=codex_bin,
+            model=model,
+            timeout_seconds=timeout,
+            use_project_context=project_context,
+        )
+    result = OperatorWorkflow(root=root).process(
+        extractor=extractor,
+        event_limit=event_limit,
+        extraction_limit=extraction_limit,
+        idle_after_seconds=idle_after,
+        max_segment_gap_seconds=max_gap,
+        apply_decay=decay,
+    )
+    typer.echo(json.dumps(result.to_dict(), indent=2))
+
+
+@app.command("review")
+def operator_review(
+    root: Path = typer.Option(Path(".memory-mcp")),
+    host: str = typer.Option("127.0.0.1", help="Bind address for the local review UI."),
+    port: int = typer.Option(8765, help="Port for the local review UI."),
+) -> None:
+    import uvicorn
+
+    uvicorn.run(create_app(root), host=host, port=port)

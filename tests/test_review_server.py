@@ -57,3 +57,27 @@ def test_review_server_updates_candidate(tmp_path) -> None:
     payload = response.json()["candidate"]
     assert payload["lesson"] == "Use uv for tests."
     assert payload["confidence"] == 0.75
+
+
+def test_review_server_reject_requires_reason(tmp_path) -> None:
+    root = tmp_path / "memory"
+    event_store = EventStore(root)
+    candidate = event_store.create_memory_candidate(
+        MemoryCandidateCreate(
+            situation="When running tests.",
+            lesson="Use pytest.",
+            action="Run pytest.",
+            category="testing",
+            evidence_summary="User correction.",
+            creation_reason="User correction.",
+        )
+    )
+    client = TestClient(create_app(root))
+
+    response = client.post(
+        f"/api/candidates/{candidate.id}/reject",
+        json={"reason": ""},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "reason is required"

@@ -2,14 +2,14 @@
 
 ## Goal
 
-Build a small local Memory MCP server that gives agents useful retrieval over past experience, plus a daemon that learns which memories are actually useful over time.
+Build a small local Memory MCP server that gives agents useful retrieval over past experience, plus a processing pipeline that learns which memories are actually useful over time.
 
 The product should stay narrow:
 
 - Store compact memories about prior work.
 - Retrieve relevant memories for the current task.
 - Track whether retrieved memories were used or helped.
-- Adjust memory scores in the background.
+- Adjust memory scores during local processing.
 - Expose retrieval through MCP tools so any agent can use it.
 
 This is intentionally not a full agent platform.
@@ -25,7 +25,7 @@ Agent / Client
       -> SQLite metadata store, optional but recommended
 
 Hook / Event Logs
-  -> Learning Daemon
+  -> Processing Pipeline
       -> usage classifier
       -> score updater
       -> dedupe / consolidation worker
@@ -57,21 +57,20 @@ src/memory_mcp/
     cli.py
     examples/
 
-  daemon/
-    processor.py
+  pipeline/
+    extractors.py
     scoring.py
     workers/
       event_worker.py
       session_worker.py
       candidate_worker.py
       decay_worker.py
-    cli.py
 ```
 
 Runtime surfaces should stay separate:
 
 - `hooks` catches moments and appends normalized events.
-- `daemon` consumes events and updates or creates memories.
+- `pipeline` contains reusable workers used by `memory-mcp process`.
 - `mcp_server` exposes memory tools to agents.
 - `review` exposes local human review for memory candidates.
 - `core` owns shared storage, models, embeddings, and event schema.
@@ -155,7 +154,7 @@ SQLite stores:
 - full memory records
 - event log
 - score history
-- daemon checkpoints
+- processing pipeline checkpoints
 - source/provenance metadata
 
 SQLite is optional for a prototype, but recommended because metadata updates, audit history, and event processing are easier there than in a vector table alone.
@@ -312,9 +311,9 @@ Apply penalties:
 
 Track retrieval separately from usage. Retrieval alone is weak evidence.
 
-## Feedback Loop Daemon
+## Feedback Processing Pipeline
 
-The daemon runs outside the MCP request path.
+The processing pipeline runs outside the MCP request path.
 
 Responsibilities:
 
@@ -326,7 +325,7 @@ Responsibilities:
 - Detect contradicted or stale memories.
 - Propose consolidated memories from repeated patterns.
 
-Daemon loop:
+Processing pipeline loop:
 
 ```text
 1. Read unprocessed events.
@@ -413,7 +412,7 @@ Store:
 - source kind
 - session/run/message ids
 - original text or reference
-- creator: user, agent, daemon, import
+- creator: user, agent, processing pipeline, import
 - creation reason
 
 ### Memory Quality Gates
@@ -437,7 +436,7 @@ When creating memory:
 
 1. Search similar memories.
 2. If similarity is high, update existing memory instead of creating a new one.
-3. If several memories describe the same lesson, consolidate them in the daemon.
+3. If several memories describe the same lesson, consolidate them in the processing pipeline.
 
 ### Conflict Handling
 
@@ -544,7 +543,7 @@ Do not create a memory from:
 - Implementation details that are already obvious from checked-in docs,
   `AGENTS.md`, or source code and do not add a learned constraint.
 
-Required fields for every daemon-created memory:
+Required fields for every pipeline-created memory:
 
 ```json
 {
@@ -553,7 +552,7 @@ Required fields for every daemon-created memory:
   "helpful_explanation": "...",
   "tags": ["..."],
   "source": {
-    "kind": "daemon_candidate",
+    "kind": "pipeline_candidate",
     "session_id": "...",
     "run_id": "...",
     "evidence_event_ids": ["..."],
@@ -574,9 +573,9 @@ Minimum acceptance rules:
 - Confidence must meet the configured threshold, except for explicit
   user-created memories.
 
-## How The Daemon Catches Memory Candidates
+## How The Pipeline Catches Memory Candidates
 
-Hooks catch lifecycle moments. The daemon decides whether those moments should
+Hooks catch lifecycle moments. The processing pipeline decides whether those moments should
 become memory.
 
 Primary event sources:
@@ -589,7 +588,7 @@ Primary event sources:
   built-in generated memory files as external source material
 - Optional session transcript reader for finalized local session files
 
-Daemon capture loop:
+Pipeline capture loop:
 
 ```text
 1. Ingest new hook, MCP, filesystem, and transcript events.
@@ -605,7 +604,7 @@ Daemon capture loop:
 10. Emit observability records explaining the decision.
 ```
 
-Recommended V1 daemon behavior:
+Recommended V1 processing pipeline behavior:
 
 - Create memories automatically only for explicit remember requests and clear
   user corrections.
@@ -637,7 +636,7 @@ repeated_pattern:
   similar candidate appears across N sessions within a configured window
 ```
 
-Daemon outputs:
+Pipeline outputs:
 
 - `memory_created`
 - `memory_updated`
@@ -673,15 +672,15 @@ Daemon outputs:
 - add hook-friendly JSON stdin appender
 - add Codex hook example config
 
-### Milestone 3B: Event Processing Daemon
+### Milestone 3B: Event Processing Pipeline
 
-- daemon consumes unprocessed events
+- processing pipeline consumes unprocessed events
 - update score counters from `memory_feedback`
 - apply weak score signal from `memory_retrieved`
 - add daily decay
 - mark events processed or failed
-- add daemon `once`, `run`, and `status` commands
-- later: daemon proposes memory candidates from explicit remember requests and user corrections
+- expose the pipeline through `memory-mcp process` and `memory-mcp status`
+- later: processing pipeline proposes memory candidates from explicit remember requests and user corrections
 
 ### Milestone 4: Quality Controls
 
@@ -717,7 +716,7 @@ Daemon outputs:
 
 #### Milestone 4C: Sessionization And Candidate Queue
 
-- [x] split daemon responsibilities into workers with different schedules:
+- [x] split processing pipeline responsibilities into workers with different schedules:
   - event worker: fast polling for `memory_feedback` and `memory_retrieved`
   - session worker: slower polling to identify idle sessions
   - candidate worker: delayed candidate extraction after session idle
@@ -731,7 +730,7 @@ Daemon outputs:
 - [x] only process candidate extraction after an idle threshold, for example no new events for 10 minutes
 - [x] add a pending candidate table separate from active memories
 - [x] store candidate fields, evidence event ids, confidence, creation reason, status, and rejection reason
-- [x] add CLI commands to list, inspect, approve, reject, or retry pending candidates
+- [x] add review service/UI commands to list, inspect, approve, reject, or retry pending candidates
 - [x] approving a candidate runs the same dedupe-on-create path
 - [x] rejecting a candidate stores the rejection reason
 - [x] add tests for session idle detection and candidate lifecycle
@@ -742,7 +741,7 @@ session refresh with incremental CDC-style sessionization.
 
 #### Milestone 4D: LLM Memory Candidate Extractor
 
-- [x] add an extractor interface so the daemon can use a fake extractor in tests and a Codex CLI extractor in runtime
+- [x] add an extractor interface so the processing pipeline can use a fake extractor in tests and a Codex CLI extractor in runtime
 - [x] use Codex CLI for the MVP extractor instead of an SDK integration
 - [x] implement `CodexCliExtractor` as a narrow adapter around `codex exec`
 - [x] use `codex exec` non-interactively:
@@ -751,9 +750,9 @@ session refresh with incremental CDC-style sessionization.
   - run with `--sandbox read-only` because extraction should inspect provided logs only
   - use `--cd <project>` when project context is useful
   - use `--output-schema <schema-file>` to request strict structured output
-  - use `--output-last-message <file>` so the daemon can parse the final JSON from a file
-  - optionally use `--json` only for daemon diagnostics; do not parse human text logs as the contract
-- [x] keep the CLI command construction isolated so a later SDK extractor can replace it without changing daemon flow
+  - use `--output-last-message <file>` so the processing pipeline can parse the final JSON from a file
+  - optionally use `--json` only for processing pipeline diagnostics; do not parse human text logs as the contract
+- [x] keep the CLI command construction isolated so a later SDK extractor can replace it without changing processing pipeline flow
 - [x] add timeout, exit-code, stderr, and invalid-JSON handling around the Codex CLI process
 - [x] run extraction only for idle sessions from 4C, never for active sessions
 - [x] extract memory candidates directly from session events; do not persist generic summaries unless candidates exist
@@ -773,7 +772,7 @@ session refresh with incremental CDC-style sessionization.
   - evidence summary
   - no-memory reason when no candidate exists
 - [x] store extracted lessons as pending candidates, not active memories by default
-- [x] MVP rule: daemon/LLM-generated candidates require explicit human approval before becoming active memories
+- [x] MVP rule: pipeline/LLM-generated candidates require explicit human approval before becoming active memories
 - [x] skip candidate creation when the session has no reusable lesson
 - [x] add fixture-based tests for should-create and should-not-create cases
 
@@ -818,23 +817,51 @@ Status: complete.
 - [x] LLM candidate extraction evals for good memory vs no-memory sessions
 - [x] candidate approval/rejection workflow tests
 
-### Milestone 7: Redaction And Secret Safety
+### Milestone 7: Operator Workflow CLI
+
+Status: complete.
+
+- [x] add a higher-level operator UX so normal use does not require low-level pipeline/hook commands
+- [x] keep existing low-level commands for debugging and tests
+- [x] add `memory-mcp status` summary that shows:
+  - event backlog
+  - failed events
+  - open/idle/failed session segments
+  - pending/rejected/approved candidates
+  - active/stale/invalid memory counts
+- [x] add `memory-mcp process` for the normal MVP pipeline:
+  - process pending feedback/retrieval events
+  - refresh/sessionize captured events
+  - run candidate extraction for idle segments
+  - print one concise JSON or table summary
+- [x] add `memory-mcp review` to start the local review UI using `memory-mcp-review serve`
+- [x] expose safe defaults:
+  - `--root .memory-mcp`
+  - local review bind `127.0.0.1`
+  - extraction limit default low enough for manual review
+- [x] document the recommended daily workflow:
+  - `uv run memory-mcp status`
+  - `uv run memory-mcp process`
+  - `uv run memory-mcp review`
+- [x] add tests for status aggregation and process orchestration with a fake extractor
+
+### Milestone 8: Redaction And Secret Safety
 
 - add core redaction module for text and nested JSON-like payloads
 - redact hook/event payloads before writing `events.sqlite`
 - redact explicit `memory_create` fields before embedding or storage
-- redact daemon-created memory candidates before quality gates
+- redact pipeline-created memory candidates before quality gates
 - reject high-risk candidates such as private key blocks or empty-after-redaction memories
 - store redaction metadata in memory source metadata and event payload metadata
 - add tests for API keys, bearer tokens, private keys, password fields, and nested payloads
 - support deleting memories by id
 
-### Milestone 8: Incremental Event CDC For Sessionization
+### Milestone 9: Incremental Event CDC For Sessionization
 
 - stop using full-table event scans for normal session refresh
 - add a sessionization checkpoint, for example `session_worker_last_event_created_at`
   plus a tie-breaker event id
-- process only events newer than the checkpoint in normal daemon runs
+- process only events newer than the checkpoint in normal processing pipeline runs
 - maintain session aggregate rows incrementally as events arrive:
   - project
   - session id
@@ -847,16 +874,15 @@ Status: complete.
 - split a segment when the new event gap exceeds `max_segment_gap`
 - mark existing open segments idle with a targeted query on `last_event_at`, not by
   rescanning all events
-- keep a manual backfill command for migrations and repair, but make it explicit:
-  `memory-mcp-daemon sessions rebuild`
-- make `sessions refresh` incremental, or rename it to `sessions catch-up`
+- keep a manual backfill command for migrations and repair, but make it explicit
+- make session refresh incremental inside `memory-mcp process`, or add a clear repair command later
 - add tests proving:
   - the second refresh reads only new events
   - same timestamp events are handled by event id tie-breaker
   - long gaps create new segments
   - idle marking does not require scanning event payloads
 
-### Milestone 9: Candidate Merge And Rich Dashboard Workflow
+### Milestone 10: Candidate Merge And Rich Dashboard Workflow
 
 - support merging related candidates across segments
 - merge flow preserves:
@@ -904,19 +930,19 @@ Status: complete.
 
 ## Open Questions
 
-- Should explicit user-created memories bypass daemon approval?
+- Should explicit user-created memories bypass processing pipeline approval?
 - Should memories be scoped globally, per project, per user, or per agent?
-- Should the daemon infer usage from final answers, or only trust explicit `memory_feedback` at first?
+- Should the processing pipeline infer usage from final answers, or only trust explicit `memory_feedback` at first?
 - How aggressive should decay be for memories that are rarely used?
-- Which daemon candidate types should be auto-created versus marked pending review?
+- Which processing pipeline candidate types should be auto-created versus marked pending review?
 - Should imported Codex built-in memory files be indexed directly or only used as evidence?
 
 ## Suggested V1 Defaults
 
 - Scope memories by project.
 - Allow explicit `memory_create`, but run redaction before storage and dedupe before create.
-- Let the daemon create memories for explicit remember requests and clear user corrections.
-- Mark inferred daemon candidates as `pending_review` before they become active.
+- Let the processing pipeline create memories for explicit remember requests and clear user corrections.
+- Mark inferred processing pipeline candidates as `pending_review` before they become active.
 - Treat `retrieved` as weak signal only.
 - Treat explicit `helpful`, `incorrect`, and `contradicted` as strong signals.
 - Keep all ranking/scoring rules transparent and inspectable.

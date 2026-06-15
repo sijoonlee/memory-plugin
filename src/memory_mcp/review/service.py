@@ -15,7 +15,7 @@ from memory_mcp.core.events import (
 )
 from memory_mcp.core.models import MemoryRecord
 from memory_mcp.core.store import LocalMemoryStore
-from memory_mcp.daemon.workers.candidate_worker import CandidateWorker
+from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
 
 
 class CandidateUpdate(BaseModel):

@@ -245,7 +245,7 @@ class LocalMemoryStore:
             )
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS daemon_checkpoints (
+                CREATE TABLE IF NOT EXISTS checkpoints (
                     name TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -256,7 +256,7 @@ class LocalMemoryStore:
     def get_checkpoint(self, name: str) -> str | None:
         with self._connect_sqlite() as conn:
             row = conn.execute(
-                "SELECT value FROM daemon_checkpoints WHERE name = ?",
+                "SELECT value FROM checkpoints WHERE name = ?",
                 (name,),
             ).fetchone()
         if row is None:
@@ -268,7 +268,7 @@ class LocalMemoryStore:
         with self._connect_sqlite() as conn:
             conn.execute(
                 """
-                INSERT INTO daemon_checkpoints (name, value, updated_at)
+                INSERT INTO checkpoints (name, value, updated_at)
                 VALUES (?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET
                     value = excluded.value,

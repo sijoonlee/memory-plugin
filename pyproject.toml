@@ -22,7 +22,6 @@ dev = [
 
 [project.scripts]
 memory-mcp = "memory_mcp.cli:app"
-memory-mcp-daemon = "memory_mcp.daemon.cli:app"
 memory-mcp-event = "memory_mcp.hooks.cli:app"
 memory-mcp-review = "memory_mcp.review.cli:app"
 memory-mcp-server = "memory_mcp.mcp_server.server:main"

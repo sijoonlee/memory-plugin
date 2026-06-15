@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from memory_mcp.core.events import EventRecord, EventStore, MemoryCandidateCreate, SessionSegmentRecord
-from memory_mcp.daemon.extractors import ExtractionResult, MemoryExtractor
+from memory_mcp.pipeline.extractors import ExtractionResult, MemoryExtractor
 
 
 @dataclass(frozen=True)

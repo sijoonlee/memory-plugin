@@ -15,7 +15,7 @@ src/memory_mcp/
   core/        shared models, storage, embeddings, and event log
   mcp_server/  MCP stdio server and tool service layer
   hooks/       hook/event ingestion CLI and examples
-  daemon/      event, decay, session, candidate, and extraction workers
+  pipeline/    reusable event, session, candidate, and extraction workers
   review/      local human review service and dashboard
 ```
 
@@ -44,18 +44,68 @@ Show all commands:
 ```bash
 uv run memory-mcp --help
 uv run memory-mcp-event --help
-uv run memory-mcp-daemon --help
 uv run memory-mcp-review --help
 uv run memory-mcp-server
 ```
 
 Command surfaces:
 
-- `memory-mcp`: create, search, get, export, and install the embedding model
+- `memory-mcp`: normal operator workflow plus memory create/search/get/export
 - `memory-mcp-server`: run the MCP stdio server
 - `memory-mcp-event`: append hook/event log rows and inspect event backlog
-- `memory-mcp-daemon`: process events, sessionize logs, and extract candidates
 - `memory-mcp-review`: run the local human review UI/API for pending candidates
+
+## Daily Workflow
+
+For normal local use, start with the higher-level workflow commands:
+
+```bash
+uv run memory-mcp status
+uv run memory-mcp process
+uv run memory-mcp review
+```
+
+`status` prints one JSON summary of event backlog, session segments, memory
+candidates, and memory status counts.
+
+`process` runs the MVP pipeline:
+
+1. process pending retrieval/feedback events
+2. refresh session segments from captured events
+3. extract pending memory candidates from idle segments
+4. apply daily score decay unless disabled
+
+Useful options:
+
+```bash
+uv run memory-mcp process \
+  --event-limit 100 \
+  --extraction-limit 1 \
+  --idle-after 600 \
+  --max-gap 7200
+```
+
+Use `--extraction-limit 0` to process events and session segments without
+calling the extractor:
+
+```bash
+uv run memory-mcp process --extraction-limit 0
+```
+
+`review` starts the local candidate review UI:
+
+```bash
+uv run memory-mcp review
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765
+```
+
+The lower-level `memory-mcp-event` and `memory-mcp-review` commands remain
+available for hooks, debugging, tests, and manual repair.
 
 ### `install-model`
 
@@ -180,7 +230,7 @@ Example MCP client configuration:
 
 ### `memory-mcp-event`
 
-Append normalized events for the future daemon to process:
+Append normalized events for `memory-mcp process` to consume:
 
 ```bash
 uv run memory-mcp-event append \
@@ -251,100 +301,21 @@ It records these Codex lifecycle events:
 After starting a new Codex session, run `/hooks` to review and trust the
 project-local hooks before they execute.
 
-### `memory-mcp-daemon`
+### Pipeline Processing
 
-Process pending events once:
-
-```bash
-uv run memory-mcp-daemon once
-uv run memory-mcp-daemon once --limit 50 --no-decay
-```
-
-Run as a polling daemon:
-
-```bash
-uv run memory-mcp-daemon run --interval 5
-uv run memory-mcp-daemon run --interval 10 --limit 50 --no-decay
-```
-
-Check daemon input status:
-
-```bash
-uv run memory-mcp-daemon status
-```
-
-Refresh session segments from captured events:
-
-```bash
-uv run memory-mcp-daemon sessions refresh
-uv run memory-mcp-daemon sessions refresh --idle-after 600 --max-gap 7200
-```
-
-List or inspect session segments:
-
-```bash
-uv run memory-mcp-daemon sessions list --status idle
-uv run memory-mcp-daemon sessions show <segment-id> --events
-```
+`memory-mcp process` is the supported way to consume captured events and produce
+reviewable memory candidates.
 
 Session statuses are `open`, `idle`, `processed`, `skipped`, and `failed`.
-`sessions refresh` currently rebuilds segment state from captured events; later
-CDC work will make this incremental.
-
-Extract pending memory candidates from idle session segments with Codex CLI:
-
-```bash
-uv run memory-mcp-daemon extract once --limit 1
-```
-
-Useful extraction options:
-
-```bash
-uv run memory-mcp-daemon extract once \
-  --limit 3 \
-  --model gpt-5 \
-  --timeout 180
-
-uv run memory-mcp-daemon extract once \
-  --segment-id <segment-id>
-
-uv run memory-mcp-daemon extract once \
-  --segment-id <segment-id> \
-  --project-context
-
-uv run memory-mcp-daemon extract schema
-```
+Candidate statuses are `pending_review`, `approved`, `rejected`, and `merged`.
+Approving a candidate runs the normal memory creation path, including dedupe.
 
 The extractor uses `codex exec` non-interactively with a JSON schema and writes
 only `pending_review` candidates. It does not create active memories directly.
 By default it passes the session events as input and does not run Codex inside
 the project directory, so project hooks are not triggered recursively. Use
-`--project-context` only when extraction needs repository file access.
-
-Create and review memory candidates:
-
-```bash
-uv run memory-mcp-daemon candidates create \
-  --situation "When running tests in this repo." \
-  --lesson "Direct pytest used the wrong environment." \
-  --action "Use uv run pytest so dependencies resolve from the project environment." \
-  --category durable_workflow \
-  --confidence 0.8 \
-  --creation-reason "Manual candidate from review." \
-  --evidence-event-id evt_123 \
-  --evidence-summary "Direct pytest failed; uv run pytest passed." \
-  --source-session-segment-id seg_123
-
-uv run memory-mcp-daemon candidates list
-uv run memory-mcp-daemon candidates list --status rejected
-uv run memory-mcp-daemon candidates show <candidate-id>
-uv run memory-mcp-daemon candidates approve <candidate-id>
-uv run memory-mcp-daemon candidates reject <candidate-id> --reason "Too vague."
-uv run memory-mcp-daemon candidates retry <candidate-id>
-```
-
-Candidate statuses are `pending_review`, `approved`, `rejected`, and `merged`.
-Approving a candidate runs the normal memory creation path, including dedupe.
+`memory-mcp process --project-context` only when extraction needs repository
+file access.
 
 ### `memory-mcp-review`
 
@@ -374,13 +345,13 @@ evidence events, edit fields, approve into memory, reject with a reason, and
 mark failed or skipped source segments as ready for extraction retry. It binds
 to `127.0.0.1` by default.
 
-The daemon currently processes:
+`memory-mcp process` currently handles:
 
 - `memory_feedback`: applies feedback score rules and counter updates
 - `memory_retrieved`: applies the weak retrieval score signal
 - session segments: derives `open` and `idle` segments from captured events
 - extraction: turns idle session segments into pending memory candidates when
-  `memory-mcp-daemon extract once` is run
+  extraction is enabled
 - memory candidates: keeps human-reviewed pending candidates separate from active memories
 - daily decay: applies `score = score * 0.995` once per elapsed day
 

@@ -101,14 +101,35 @@ button {
 .candidate-row {
   display: grid;
   gap: 5px;
+  width: 100%;
   padding: 12px 14px;
+  text-align: left;
+  color: var(--text);
+  background: var(--surface);
+  border: 0;
   border-bottom: 1px solid var(--line);
+  border-radius: 0;
   cursor: pointer;
 }
 
-.candidate-row:hover,
+.candidate-row:hover {
+  color: var(--text);
+  background: #f1f6f8;
+}
+
 .candidate-row.active {
-  background: #eef5f7;
+  padding-left: 10px;
+  color: var(--text);
+  background: #e4f1f5;
+  border-left: 4px solid var(--accent);
+}
+
+.candidate-row.active .row-title {
+  color: var(--text);
+}
+
+.candidate-row.active .row-meta {
+  color: #455663;
 }
 
 .row-title {
@@ -157,6 +178,7 @@ button {
 .actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .actions button {
@@ -172,6 +194,19 @@ button {
 .danger {
   background: var(--danger);
   border-color: var(--danger);
+}
+
+.reject-box {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #e0b4b4;
+  border-radius: 6px;
+  background: #fff8f8;
+}
+
+.hidden {
+  display: none;
 }
 
 .evidence {

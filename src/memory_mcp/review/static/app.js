@@ -59,9 +59,16 @@ function renderDetail(data, includeSegmentEvents) {
           ${textarea("creation_reason", "Creation Reason", candidate.creation_reason)}
           ${textarea("evidence_summary", "Evidence Summary", candidate.evidence_summary)}
           <div class="actions">
-            <button type="submit">Save</button>
+            <button type="submit">Save Draft</button>
             <button type="button" id="approve">Approve</button>
             <button type="button" class="danger" id="reject">Reject</button>
+          </div>
+          <div class="reject-box hidden" id="rejectBox">
+            <label>Reject Reason<textarea id="rejectReason" rows="3"></textarea></label>
+            <div class="actions">
+              <button type="button" class="danger" id="confirmReject">Confirm Reject</button>
+              <button type="button" class="secondary" id="cancelReject">Cancel</button>
+            </div>
           </div>
         </form>
       </div>
@@ -81,16 +88,24 @@ function renderDetail(data, includeSegmentEvents) {
 
   document.querySelector("#editor").addEventListener("submit", async (event) => {
     event.preventDefault();
-    await saveCandidate(candidate.id);
+    runAction(() => saveCandidate(candidate.id));
   });
-  document.querySelector("#approve").addEventListener("click", () => approveCandidate(candidate.id));
-  document.querySelector("#reject").addEventListener("click", () => rejectCandidate(candidate.id));
+  document.querySelector("#approve").addEventListener("click", () => {
+    runAction(() => approveCandidate(candidate.id));
+  });
+  document.querySelector("#reject").addEventListener("click", () => showRejectBox());
+  document.querySelector("#confirmReject").addEventListener("click", () => {
+    runAction(() => rejectCandidate(candidate.id));
+  });
+  document.querySelector("#cancelReject").addEventListener("click", () => hideRejectBox());
   document.querySelector("#toggleRaw").addEventListener("click", () => {
-    selectCandidate(candidate.id, !includeSegmentEvents);
+    runAction(() => selectCandidate(candidate.id, !includeSegmentEvents));
   });
   const retry = document.querySelector("#retrySegment");
   if (retry) {
-    retry.addEventListener("click", () => retrySegment(data.source_segment.id));
+    retry.addEventListener("click", () => {
+      runAction(() => retrySegment(data.source_segment.id));
+    });
   }
 }
 
@@ -100,7 +115,7 @@ async function saveCandidate(candidateId) {
     method: "PATCH",
     body: JSON.stringify(body),
   });
-  setStatus("Saved");
+  setStatus("Draft saved");
   selectCandidate(candidateId);
 }
 
@@ -116,8 +131,12 @@ async function approveCandidate(candidateId) {
 }
 
 async function rejectCandidate(candidateId) {
-  const reason = window.prompt("Reject reason");
-  if (!reason) return;
+  const reason = document.querySelector("#rejectReason").value.trim();
+  if (!reason) {
+    setStatus("Reject reason is required");
+    document.querySelector("#rejectReason").focus();
+    return;
+  }
   await request(`/api/candidates/${candidateId}/reject`, {
     method: "POST",
     body: JSON.stringify({ reason }),
@@ -126,6 +145,24 @@ async function rejectCandidate(candidateId) {
   detailEl.innerHTML = `<div class="empty">Candidate rejected.</div>`;
   state.selectedId = null;
   loadCandidates();
+}
+
+function showRejectBox() {
+  document.querySelector("#rejectBox").classList.remove("hidden");
+  document.querySelector("#rejectReason").focus();
+}
+
+function hideRejectBox() {
+  document.querySelector("#rejectBox").classList.add("hidden");
+  document.querySelector("#rejectReason").value = "";
+}
+
+async function runAction(action) {
+  try {
+    await action();
+  } catch (error) {
+    setStatus(error.message);
+  }
 }
 
 async function retrySegment(segmentId) {

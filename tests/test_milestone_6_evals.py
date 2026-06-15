@@ -11,14 +11,14 @@ from memory_mcp.core.events import (
 )
 from memory_mcp.core.models import MemoryCreate, MemoryFeedback
 from memory_mcp.core.store import LocalMemoryStore
-from memory_mcp.daemon.extractors import (
+from memory_mcp.pipeline.extractors import (
     ExtractedMemoryCandidate,
     ExtractionResult,
     StaticMemoryExtractor,
 )
-from memory_mcp.daemon.workers.candidate_worker import CandidateWorker
-from memory_mcp.daemon.workers.extraction_worker import ExtractionWorker
-from memory_mcp.daemon.workers.session_worker import SessionWorker
+from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
+from memory_mcp.pipeline.workers.extraction_worker import ExtractionWorker
+from memory_mcp.pipeline.workers.session_worker import SessionWorker
 from memory_mcp.mcp_server.service import (
     memory_create,
     memory_feedback,

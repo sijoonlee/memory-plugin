@@ -175,7 +175,7 @@ def _candidate_to_memory_create(candidate: MemoryCandidateRecord) -> MemoryCreat
         tags=[candidate.category],
         confidence=candidate.confidence,
         source=MemorySource(
-            kind="daemon_candidate",
+            kind="pipeline_candidate",
             evidence_event_ids=candidate.evidence_event_ids,
             creation_reason=candidate.creation_reason,
             extra={

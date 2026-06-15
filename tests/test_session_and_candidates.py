@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 from memory_mcp.core.events import EventCreate, EventStore, MemoryCandidateCreate
 from memory_mcp.core.store import LocalMemoryStore
-from memory_mcp.daemon.workers.candidate_worker import CandidateWorker
-from memory_mcp.daemon.workers.session_worker import SessionWorker
+from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
+from memory_mcp.pipeline.workers.session_worker import SessionWorker
 
 from conftest import FakeEmbedder
 
@@ -63,7 +63,7 @@ def test_candidate_worker_approves_candidate_into_memory(tmp_path) -> None:
     assert memory_store.get_memory(memory.id) is not None
     assert memory.when_useful == "When running tests in this repo."
     assert memory.what_happened == "Direct pytest uses the wrong environment."
-    assert memory.source.kind == "daemon_candidate"
+    assert memory.source.kind == "pipeline_candidate"
     assert memory.source.evidence_event_ids == ["evt_1"]
 
 

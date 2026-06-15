@@ -1,1 +1,0 @@
-"""Event processing daemon package."""
