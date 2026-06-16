@@ -10,7 +10,6 @@ MARKETPLACE_FILE="${MARKETPLACE_ROOT}/.claude-plugin/marketplace.json"
 PLUGIN_SOURCE_ROOT="${PLUGIN_SOURCE_ROOT:-${MARKETPLACE_ROOT}/plugins}"
 PLUGIN_LINK="${PLUGIN_SOURCE_ROOT}/${PLUGIN_NAME}"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
-SETTINGS_TARGET="${PROJECT_ROOT}/.claude/settings.json"
 
 realpath_portable() {
   python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
@@ -78,46 +77,8 @@ else
   echo "Plugin symlink not found: ${PLUGIN_LINK}"
 fi
 
-if [[ -f "${SETTINGS_TARGET}" ]]; then
-  echo "Removing Memory MCP hooks from ${SETTINGS_TARGET}..."
-  SETTINGS_TARGET="${SETTINGS_TARGET}" python3 <<'PY'
-import json
-import os
-from pathlib import Path
-
-path = Path(os.environ["SETTINGS_TARGET"]).expanduser()
-settings = json.loads(path.read_text(encoding="utf-8"))
-
-if not isinstance(settings, dict):
-    raise SystemExit(f"{path} must contain a JSON object")
-
-
-def is_memory_entry(entry):
-    if not isinstance(entry, dict):
-        return False
-    for hook in entry.get("hooks", []):
-        command = hook.get("command", "") if isinstance(hook, dict) else ""
-        if "memory-mcp-event append" in command and "--adapter claude" in command:
-            return True
-    return False
-
-
-hooks = settings.get("hooks")
-if isinstance(hooks, dict):
-    for event in list(hooks):
-        kept = [entry for entry in hooks[event] if not is_memory_entry(entry)]
-        if kept:
-            hooks[event] = kept
-        else:
-            del hooks[event]
-    if not hooks:
-        settings.pop("hooks", None)
-
-path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-PY
-else
-  echo "Claude settings not found: ${SETTINGS_TARGET}"
-fi
+# Hooks are declared in the plugin manifest, so `claude plugin uninstall`
+# unloads them automatically. No settings.json cleanup needed.
 
 echo
 echo "Memory MCP plugin uninstall complete."

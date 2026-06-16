@@ -95,7 +95,8 @@ Use Claude Code as the extraction agent:
 uv run memory-mcp process \
   --extractor claude \
   --model sonnet \
-  --effort medium
+  --effort medium \
+  --idle-after 0
 ```
 
 `--model` is passed to the selected CLI extractor. `--effort` maps to Codex's

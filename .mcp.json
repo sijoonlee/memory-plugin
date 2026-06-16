@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "memory-mcp": {
-      "command": "./install-commands/scripts/memory-mcp-server.sh",
+      "command": "${CLAUDE_PLUGIN_ROOT}/install-commands/scripts/memory-mcp-server.sh",
       "args": [
       ],
       "env": {
