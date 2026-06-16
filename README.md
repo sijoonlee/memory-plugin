@@ -348,7 +348,11 @@ core storage, retrieval, and the review UI contain no agent-specific logic.
    ```
 
    The example uses `--adapter codex`, which reads `cwd`, `session_id`, and
-   `turn_id` from the piped Codex hook payload.
+   `turn_id` from the piped Codex hook payload. The commands reference the repo
+   through a `${CODEX_PLUGIN_ROOT}` placeholder; Codex does not expand
+   environment variables in hook commands, so replace it with this repo's
+   absolute path, or run `install-commands/setup-codex-plugin.sh`, which stages
+   the hooks with that substitution done for you.
 
 2. Register the MCP server (see [`memory-mcp-server`](#memory-mcp-server)).
 3. Start a Codex session and run `/hooks` to trust the project-local hooks.

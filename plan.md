@@ -915,24 +915,34 @@ on Codex lifecycle events.
 
 ### Milestone 10: Claude Code Plugin Packaging
 
-- create a Claude Code packaging layer after the agent adapter boundary exists
-- document Claude Code MCP installation for `memory-mcp-server`
-- provide Claude Code configuration snippets for:
-  - MCP server registration
-  - memory store root selection
-  - project-scoped setup
-- provide Claude Code event capture setup when supported by Claude Code:
-  - map lifecycle events to `memory-mcp-event append`
-  - preserve project/session/run identifiers when available
-  - fall back to stable source/project identifiers when session metadata is unavailable
-- provide Claude-facing instructions comparable to the Codex Memory MCP skill:
-  - when to search memory
-  - when to create explicit memory
-  - when to send feedback
-  - how to use `memory-mcp status/process/review`
-- include setup/status helper scripts or docs specific to Claude Code usage
-- add fixture tests for Claude Code package/config generation where practical
-- keep Claude Code packaging separate from Codex plugin packaging
+Status: complete.
+
+- [x] create a Claude Code packaging layer after the agent adapter boundary exists
+- [x] document Claude Code MCP installation for `memory-mcp-server`
+- [x] provide Claude Code configuration snippets for:
+  - [x] MCP server registration
+  - [x] memory store root selection
+  - [x] project-scoped setup
+- [x] provide Claude Code event capture setup when supported by Claude Code:
+  - [x] map lifecycle events to `memory-mcp-event append`
+  - [x] preserve project/session/run identifiers when available
+  - [x] fall back to stable source/project identifiers when session metadata is unavailable
+- [x] provide Claude-facing instructions comparable to the Codex Memory MCP skill:
+  - [x] when to search memory
+  - [x] when to create explicit memory
+  - [x] when to send feedback
+  - [x] how to use `memory-mcp status/process/review`
+- [x] include setup/status helper scripts or docs specific to Claude Code usage
+- [x] add fixture tests for Claude Code package/config generation where practical
+- [x] keep Claude Code packaging separate from Codex plugin packaging
+
+Note: the Claude Memory MCP skill is shared with Codex at `skills/memory-mcp/SKILL.md`
+because the guidance is agent-agnostic. Unlike Codex, which stages a standalone
+`.codex/hooks.json`, Claude Code reads hooks from `.claude/settings.json`, so
+`setup-claude-plugin.sh` merges the packaged hook events into that file (resolving
+`${CLAUDE_PLUGIN_ROOT}` to the repo path) and `uninstall-claude-plugin.sh` removes
+only the Memory MCP entries. Hooks are intentionally not referenced from
+`.claude-plugin/plugin.json`, so installing the plugin never auto-runs commands.
 
 ### Milestone 11: Redaction And Secret Safety
 

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --directory \"$(git rev-parse --show-toplevel)\" run memory-mcp-event append --quiet --root \"$(git rev-parse --show-toplevel)/.memory-mcp\" --adapter codex --event-type user_prompt",
+            "command": "uv --directory \"${CODEX_PLUGIN_ROOT}\" run memory-mcp-event append --quiet --root \"${CODEX_PLUGIN_ROOT}/.memory-mcp\" --adapter codex --event-type user_prompt",
             "statusMessage": "Recording prompt event"
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --directory \"$(git rev-parse --show-toplevel)\" run memory-mcp-event append --quiet --root \"$(git rev-parse --show-toplevel)/.memory-mcp\" --adapter codex --event-type tool_result",
+            "command": "uv --directory \"${CODEX_PLUGIN_ROOT}\" run memory-mcp-event append --quiet --root \"${CODEX_PLUGIN_ROOT}/.memory-mcp\" --adapter codex --event-type tool_result",
             "statusMessage": "Recording tool event"
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --directory \"$(git rev-parse --show-toplevel)\" run memory-mcp-event append --quiet --root \"$(git rev-parse --show-toplevel)/.memory-mcp\" --adapter codex --event-type turn_stop",
+            "command": "uv --directory \"${CODEX_PLUGIN_ROOT}\" run memory-mcp-event append --quiet --root \"${CODEX_PLUGIN_ROOT}/.memory-mcp\" --adapter codex --event-type turn_stop",
             "statusMessage": "Recording turn stop"
           }
         ]

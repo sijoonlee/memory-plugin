@@ -50,4 +50,4 @@ uv run memory-mcp review
 
 `status` summarizes event backlog, sessions, candidates, and memory counts. `process` consumes events, refreshes session segments, proposes candidates, and applies decay. `review` opens the local review UI for human approval or rejection of candidates.
 
-Hook configuration is packaged under `hooks/codex-hooks.json`, but installing the plugin should not be treated as consent to auto-enable hooks. Enable or merge hooks deliberately.
+Hook configuration is packaged per agent under `hooks/codex-hooks.json` and `hooks/claude-hooks.json`, but installing the plugin should not be treated as consent to auto-enable hooks. Enable or merge hooks deliberately.

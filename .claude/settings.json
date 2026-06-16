@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --directory \"$CLAUDE_PROJECT_DIR\" run memory-mcp-event append --quiet --root \"$CLAUDE_PROJECT_DIR/.memory-mcp\" --adapter claude --event-type user_prompt"
+            "command": "uv --directory \"/Users/sijoonlee/Documents/coding/memory-mcp\" run memory-mcp-event append --quiet --root \"/Users/sijoonlee/Documents/coding/memory-mcp/.memory-mcp\" --adapter claude --event-type user_prompt"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --directory \"$CLAUDE_PROJECT_DIR\" run memory-mcp-event append --quiet --root \"$CLAUDE_PROJECT_DIR/.memory-mcp\" --adapter claude --event-type tool_result"
+            "command": "uv --directory \"/Users/sijoonlee/Documents/coding/memory-mcp\" run memory-mcp-event append --quiet --root \"/Users/sijoonlee/Documents/coding/memory-mcp/.memory-mcp\" --adapter claude --event-type tool_result"
           }
         ]
       }
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --directory \"$CLAUDE_PROJECT_DIR\" run memory-mcp-event append --quiet --root \"$CLAUDE_PROJECT_DIR/.memory-mcp\" --adapter claude --event-type turn_stop"
+            "command": "uv --directory \"/Users/sijoonlee/Documents/coding/memory-mcp\" run memory-mcp-event append --quiet --root \"/Users/sijoonlee/Documents/coding/memory-mcp/.memory-mcp\" --adapter claude --event-type turn_stop"
           }
         ]
       }

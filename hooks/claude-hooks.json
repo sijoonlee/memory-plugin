@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv --directory \"${CLAUDE_PLUGIN_ROOT}\" run memory-mcp-event append --quiet --root \"${CLAUDE_PLUGIN_ROOT}/.memory-mcp\" --adapter claude --event-type user_prompt"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv --directory \"${CLAUDE_PLUGIN_ROOT}\" run memory-mcp-event append --quiet --root \"${CLAUDE_PLUGIN_ROOT}/.memory-mcp\" --adapter claude --event-type tool_result"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv --directory \"${CLAUDE_PLUGIN_ROOT}\" run memory-mcp-event append --quiet --root \"${CLAUDE_PLUGIN_ROOT}/.memory-mcp\" --adapter claude --event-type turn_stop"
+          }
+        ]
+      }
+    ]
+  }
+}

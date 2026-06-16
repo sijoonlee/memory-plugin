@@ -98,6 +98,18 @@ Set `MEMORY_MCP_ROOT` to override the default local store path.
 Hooks are packaged at `hooks/codex-hooks.json`. `install-commands/setup-codex-plugin.sh`
 stages that config at `.codex/hooks.json` so Codex can review it before use.
 
+The packaged commands use a `${CODEX_PLUGIN_ROOT}` placeholder for the repo path.
+Codex does not expand environment variables in hook commands, so the setup helper
+replaces `${CODEX_PLUGIN_ROOT}` with this repo's absolute path while staging. This
+removes the previous `git rev-parse` lookup (which assumed the hook always ran
+inside this repo and failed outside a git checkout) and keeps the hook event store
+at `<repo>/.memory-mcp`, the same store the MCP server uses. The Codex adapter
+still records each event's project from the hook payload `cwd`, so project scoping
+is preserved even though the store location is fixed.
+
+If you wire the hooks up by hand instead of running the setup helper, replace
+`${CODEX_PLUGIN_ROOT}` with the absolute path to this repository yourself.
+
 ## Local Workflow
 
 ```bash

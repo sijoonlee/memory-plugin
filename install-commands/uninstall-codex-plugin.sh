@@ -75,7 +75,28 @@ else
 fi
 
 if [[ -f "${HOOK_TARGET}" ]]; then
-  if [[ -f "${HOOK_SOURCE}" ]] && cmp -s "${HOOK_SOURCE}" "${HOOK_TARGET}"; then
+  # setup-codex-plugin.sh stages the hooks with ${CODEX_PLUGIN_ROOT} replaced by
+  # this repo's absolute path, so compare against the rendered form, not the raw
+  # packaged source.
+  if [[ -f "${HOOK_SOURCE}" ]] && \
+    HOOK_SOURCE="${HOOK_SOURCE}" \
+    HOOK_TARGET="${HOOK_TARGET}" \
+    PROJECT_ROOT="${PROJECT_ROOT}" \
+    python3 <<'PY'
+import os
+import sys
+from pathlib import Path
+
+repo = os.environ["PROJECT_ROOT"]
+rendered = (
+    Path(os.environ["HOOK_SOURCE"])
+    .read_text(encoding="utf-8")
+    .replace("${CODEX_PLUGIN_ROOT}", repo)
+)
+target = Path(os.environ["HOOK_TARGET"]).read_text(encoding="utf-8")
+sys.exit(0 if target == rendered else 1)
+PY
+  then
     echo "Removing staged hook config ${HOOK_TARGET}..."
     rm "${HOOK_TARGET}"
     rmdir "$(dirname "${HOOK_TARGET}")" 2>/dev/null || true

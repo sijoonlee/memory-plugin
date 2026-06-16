@@ -1,0 +1,17 @@
+{
+  "name": "memory-mcp",
+  "version": "0.1.0",
+  "description": "Local reusable memory retrieval, feedback, and review workflow for Claude Code.",
+  "author": {
+    "name": "Memory MCP"
+  },
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "mcp",
+    "claude-code",
+    "retrieval"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}
