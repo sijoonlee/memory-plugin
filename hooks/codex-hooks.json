@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --directory \"${CODEX_PLUGIN_ROOT}\" run memory-mcp-event append --quiet --root \"${CODEX_PLUGIN_ROOT}/.memory-mcp\" --adapter codex --event-type user_prompt",
+            "command": "\"${CODEX_UV_BIN}\" --directory \"${CODEX_PLUGIN_ROOT}\" run memory-mcp-event append --quiet --root \"${CODEX_PLUGIN_ROOT}/.memory-mcp\" --adapter codex --event-type user_prompt",
             "statusMessage": "Recording Memory MCP prompt event"
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --directory \"${CODEX_PLUGIN_ROOT}\" run memory-mcp-event append --quiet --root \"${CODEX_PLUGIN_ROOT}/.memory-mcp\" --adapter codex --event-type tool_result",
+            "command": "\"${CODEX_UV_BIN}\" --directory \"${CODEX_PLUGIN_ROOT}\" run memory-mcp-event append --quiet --root \"${CODEX_PLUGIN_ROOT}/.memory-mcp\" --adapter codex --event-type tool_result",
             "statusMessage": "Recording Memory MCP tool event"
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv --directory \"${CODEX_PLUGIN_ROOT}\" run memory-mcp-event append --quiet --root \"${CODEX_PLUGIN_ROOT}/.memory-mcp\" --adapter codex --event-type turn_stop",
+            "command": "\"${CODEX_UV_BIN}\" --directory \"${CODEX_PLUGIN_ROOT}\" run memory-mcp-event append --quiet --root \"${CODEX_PLUGIN_ROOT}/.memory-mcp\" --adapter codex --event-type turn_stop",
             "statusMessage": "Recording Memory MCP turn stop"
           }
         ]

@@ -6,7 +6,6 @@ This repository is the Memory MCP plugin root.
 
 ```text
 .codex-plugin/plugin.json  plugin manifest
-.mcp.json                  MCP server registration
 skills/memory-mcp/         Codex-facing usage guidance
 hooks/codex-hooks.json     event-capture hook config
 install-commands/setup-codex-plugin.sh  guided all-in-one setup
@@ -26,9 +25,9 @@ Run the guided setup command from any directory:
 install-commands/setup-codex-plugin.sh
 ```
 
-The setup command installs the local Codex plugin, downloads and warms the
-embedding model, stages Codex hooks for review, and prints the current memory
-status.
+The setup command installs the local Codex plugin, registers the MCP server with
+the local Codex CLI, downloads and warms the embedding model, stages Codex hooks
+for review, and prints the current memory status.
 
 ## Individual Commands
 
@@ -72,20 +71,29 @@ Run:
 install-commands/uninstall-codex-plugin.sh
 ```
 
-The uninstall helper removes the Codex plugin registration, removes the
-`memory-mcp` marketplace entry, removes the `~/plugins/memory-mcp` symlink when
-it points at this repo, and removes `.codex/hooks.json` only when it matches the
-packaged Memory MCP hook config. It leaves `.memory-mcp` data untouched.
+The uninstall helper removes the Codex MCP server registration, removes the
+Codex plugin registration, removes the `memory-mcp` marketplace entry, removes
+the `~/plugins/memory-mcp` symlink when it points at this repo, and removes
+`.codex/hooks.json` only when it matches the packaged Memory MCP hook config. It
+leaves `.memory-mcp` data untouched.
 
 ## MCP Server
 
-The plugin manifest points to `.mcp.json`, which starts the server through:
+Codex does not currently launch plugin MCP commands with the plugin root as the
+working directory, so a portable plugin manifest cannot safely point at a
+relative wrapper path. The setup helper registers a local Codex MCP entry
+instead:
 
 ```bash
-install-commands/scripts/memory-mcp-server.sh
+codex mcp add memory-mcp \
+  --env MEMORY_MCP_ROOT=<project-root>/.memory-mcp \
+  --env UV_BIN=<uv-path> \
+  -- <project-root>/install-commands/scripts/memory-mcp-server.sh
 ```
 
-The wrapper resolves the project root from its own path and then runs:
+The committed source stays portable; the generated local Codex MCP entry uses
+machine-specific paths. The wrapper resolves the project root from its own path
+and then runs:
 
 ```bash
 uv --directory <project-root> run memory-mcp-server
@@ -96,19 +104,22 @@ Set `MEMORY_MCP_ROOT` to override the default local store path.
 ## Hooks
 
 Hooks are packaged at `hooks/codex-hooks.json`. `install-commands/setup-codex-plugin.sh`
-stages that config at `.codex/hooks.json` so Codex can review it before use.
+stages that config at `.codex/hooks.json` under the directory where setup is
+run, so Codex can review it before use. Set `CODEX_HOOK_ROOT=/path/to/project`
+to stage hooks for a different Codex project root.
 
-The packaged commands use a `${CODEX_PLUGIN_ROOT}` placeholder for the repo path.
-Codex does not expand environment variables in hook commands, so the setup helper
-replaces `${CODEX_PLUGIN_ROOT}` with this repo's absolute path while staging. This
-removes the previous `git rev-parse` lookup (which assumed the hook always ran
-inside this repo and failed outside a git checkout) and keeps the hook event store
-at `<repo>/.memory-mcp`, the same store the MCP server uses. The Codex adapter
-still records each event's project from the hook payload `cwd`, so project scoping
-is preserved even though the store location is fixed.
+The packaged commands use `${CODEX_PLUGIN_ROOT}` and `${CODEX_UV_BIN}`
+placeholders. Codex does not expand environment variables in hook commands, so
+the setup helper replaces them with this repo's absolute path and the resolved
+`uv` executable while staging. This removes the previous `git rev-parse` lookup
+(which assumed the hook always ran inside this repo and failed outside a git
+checkout) and keeps the hook event store at `<repo>/.memory-mcp`, the same store
+the MCP server uses. The Codex adapter still records each event's project from
+the hook payload `cwd`, so project scoping is preserved even though the store
+location is fixed.
 
 If you wire the hooks up by hand instead of running the setup helper, replace
-`${CODEX_PLUGIN_ROOT}` with the absolute path to this repository yourself.
+`${CODEX_PLUGIN_ROOT}` and `${CODEX_UV_BIN}` yourself.
 
 ## Local Workflow
 

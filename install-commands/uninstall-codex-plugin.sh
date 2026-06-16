@@ -4,12 +4,14 @@ set -euo pipefail
 PLUGIN_NAME="memory-mcp"
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${INSTALL_DIR}/.." && pwd)"
+HOOK_ROOT="${CODEX_HOOK_ROOT:-${PWD}}"
+UV_BIN_PATH="$(command -v uv || true)"
 PLUGIN_SOURCE_ROOT="${PLUGIN_SOURCE_ROOT:-${HOME}/plugins}"
 PLUGIN_LINK="${PLUGIN_SOURCE_ROOT}/${PLUGIN_NAME}"
 MARKETPLACE_PATH="${MARKETPLACE_PATH:-${HOME}/.agents/plugins/marketplace.json}"
 CODEX_BIN="${CODEX_BIN:-codex}"
 HOOK_SOURCE="${PROJECT_ROOT}/hooks/codex-hooks.json"
-HOOK_TARGET="${PROJECT_ROOT}/.codex/hooks.json"
+HOOK_TARGET="${HOOK_ROOT}/.codex/hooks.json"
 
 realpath_portable() {
   python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
@@ -21,6 +23,15 @@ echo "Uninstalling Memory MCP Codex plugin..."
 echo
 
 if command -v "${CODEX_BIN}" >/dev/null 2>&1; then
+  echo "Removing Codex MCP server registration..."
+  if "${CODEX_BIN}" mcp get "${PLUGIN_NAME}" >/dev/null 2>&1; then
+    if ! "${CODEX_BIN}" mcp remove "${PLUGIN_NAME}"; then
+      echo "Codex MCP removal did not complete. Continuing local cleanup." >&2
+    fi
+  else
+    echo "Codex MCP server not registered: ${PLUGIN_NAME}"
+  fi
+
   echo "Removing Codex plugin registration..."
   if ! "${CODEX_BIN}" plugin remove "${PLUGIN_NAME}"; then
     echo "Codex plugin removal did not complete. Continuing local cleanup." >&2
@@ -82,16 +93,19 @@ if [[ -f "${HOOK_TARGET}" ]]; then
     HOOK_SOURCE="${HOOK_SOURCE}" \
     HOOK_TARGET="${HOOK_TARGET}" \
     PROJECT_ROOT="${PROJECT_ROOT}" \
+    UV_BIN_PATH="${UV_BIN_PATH}" \
     python3 <<'PY'
 import os
 import sys
 from pathlib import Path
 
 repo = os.environ["PROJECT_ROOT"]
+uv_bin = os.environ.get("UV_BIN_PATH", "uv")
 rendered = (
     Path(os.environ["HOOK_SOURCE"])
     .read_text(encoding="utf-8")
     .replace("${CODEX_PLUGIN_ROOT}", repo)
+    .replace("${CODEX_UV_BIN}", uv_bin)
 )
 target = Path(os.environ["HOOK_TARGET"]).read_text(encoding="utf-8")
 sys.exit(0 if target == rendered else 1)

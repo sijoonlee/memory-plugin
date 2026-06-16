@@ -1,6 +1,6 @@
 {
   "name": "memory-mcp",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260616132208",
   "description": "Local reusable memory retrieval, feedback, and review workflow for Codex.",
   "author": {
     "name": "Memory MCP"
@@ -13,7 +13,6 @@
     "retrieval"
   ],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Memory MCP",
     "shortDescription": "Local reusable memory for Codex coding work.",
