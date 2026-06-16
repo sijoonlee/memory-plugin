@@ -10,6 +10,7 @@ This repository is the Memory MCP plugin root.
 skills/memory-mcp/         Codex-facing usage guidance
 hooks/codex-hooks.json     event-capture hook config
 install-commands/setup-codex-plugin.sh  guided all-in-one setup
+install-commands/uninstall-codex-plugin.sh  local plugin uninstall helper
 install-commands/scripts/download-embedding-model.sh  embedding model warmup helper
 install-commands/scripts/install-codex-plugin.sh  local Codex plugin installer
 install-commands/scripts/check-memory-status.sh  status helper
@@ -62,6 +63,19 @@ install-commands/scripts/install-codex-plugin.sh
 ```
 
 Start a new Codex thread/session after installation so plugin skills and MCP config are reloaded.
+
+## Uninstall
+
+Run:
+
+```bash
+install-commands/uninstall-codex-plugin.sh
+```
+
+The uninstall helper removes the Codex plugin registration, removes the
+`memory-mcp` marketplace entry, removes the `~/plugins/memory-mcp` symlink when
+it points at this repo, and removes `.codex/hooks.json` only when it matches the
+packaged Memory MCP hook config. It leaves `.memory-mcp` data untouched.
 
 ## MCP Server
 
