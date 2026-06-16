@@ -173,7 +173,11 @@ class ClaudeCliExtractor:
             temp_path = Path(temp_dir)
             cmd = [
                 self.claude_bin,
-                "--bare",
+                # NOTE: do NOT use --bare here. It bundles "skip keychain reads"
+                # along with its other minimal-mode behaviors, which breaks auth
+                # on machines whose OAuth token lives only in the macOS Keychain
+                # (no ~/.claude/.credentials.json). Isolation is already provided
+                # by --no-session-persistence plus the tempdir cwd below.
                 "--print",
                 "--output-format",
                 "json",
@@ -206,7 +210,8 @@ class ClaudeCliExtractor:
             if completed.returncode != 0:
                 raise RuntimeError(
                     "claude --print failed "
-                    f"(exit={completed.returncode}): {completed.stderr.strip()}"
+                    f"(exit={completed.returncode}): "
+                    f"{completed.stderr.strip() or completed.stdout.strip()}"
                 )
 
             return _parse_extraction_output(completed.stdout.strip(), provider="claude")
@@ -252,7 +257,9 @@ def _parse_extraction_output(raw_output: str, *, provider: str) -> ExtractionRes
             ) from exc
 
         if isinstance(envelope, dict):
-            for key in ("result", "content", "response", "text"):
+            # `--output-format json` wraps the reply in an envelope; with
+            # `--json-schema` the validated object lands in `structured_output`.
+            for key in ("structured_output", "result", "content", "response", "text"):
                 value = envelope.get(key)
                 if isinstance(value, str):
                     try:

@@ -97,13 +97,15 @@ def test_claude_cli_extractor_passes_model_effort_and_schema(monkeypatch) -> Non
     ).extract(segment=_segment(), events=[_event()])
 
     assert extracted.no_memory_reason == "No reusable lesson."
-    assert captured["cmd"][:5] == [
+    assert captured["cmd"][:4] == [
         "claude-test",
-        "--bare",
         "--print",
         "--output-format",
         "json",
     ]
+    # --bare must NOT be passed: it disables keychain reads and breaks auth
+    # on machines whose OAuth token lives only in the macOS Keychain.
+    assert "--bare" not in captured["cmd"]
     assert "--json-schema" in captured["cmd"]
     assert ["--model", "sonnet"] == captured["cmd"][
         captured["cmd"].index("--model") : captured["cmd"].index("--model") + 2
