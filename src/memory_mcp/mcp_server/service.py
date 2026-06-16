@@ -3,8 +3,22 @@ from __future__ import annotations
 from typing import Any
 
 from memory_mcp.core.events import EventCreate, EventStore
-from memory_mcp.core.models import MemoryCreate, MemoryFeedback, MemorySource
+from memory_mcp.core.models import MemoryCreate, MemoryFeedback, MemoryRecord, MemorySource
 from memory_mcp.core.store import LocalMemoryStore
+from memory_mcp.operator import OperatorWorkflow
+
+_MEMORY_SUMMARY_FIELDS = (
+    "id",
+    "what_happened",
+    "when_useful",
+    "helpful_explanation",
+    "tags",
+    "status",
+    "score",
+    "confidence",
+    "created_at",
+    "updated_at",
+)
 
 
 def memory_search(
@@ -137,6 +151,57 @@ def memory_feedback(
             ),
         )
     return response
+
+
+def memory_status(
+    store: LocalMemoryStore,
+    event_store: EventStore,
+) -> dict[str, Any]:
+    """Aggregate counts for events, sessions, candidates, and memories."""
+
+    workflow = OperatorWorkflow(
+        root=store.root,
+        memory_store=store,
+        event_store=event_store,
+    )
+    return workflow.status().to_dict()
+
+
+def memory_list(
+    store: LocalMemoryStore,
+    status: str = "active",
+    limit: int = 20,
+) -> dict[str, Any]:
+    """List stored memories of a given status (browse, not semantic search)."""
+
+    records = store.list_memories(status=status)
+    return {
+        "status": status,
+        "total": len(records),
+        "returned": min(len(records), max(limit, 0)),
+        "memories": [_memory_summary(record) for record in records[:limit]],
+    }
+
+
+def candidate_list(
+    event_store: EventStore,
+    status: str = "pending_review",
+    limit: int = 20,
+) -> dict[str, Any]:
+    """List pipeline-proposed memory candidates of a given status."""
+
+    records = event_store.list_memory_candidates(status=status)
+    return {
+        "status": status,
+        "total": len(records),
+        "returned": min(len(records), max(limit, 0)),
+        "candidates": [record.model_dump(mode="json") for record in records[:limit]],
+    }
+
+
+def _memory_summary(record: MemoryRecord) -> dict[str, Any]:
+    dumped = record.model_dump(mode="json")
+    return {field: dumped[field] for field in _MEMORY_SUMMARY_FIELDS}
 
 
 def _context_value(context: dict[str, Any] | None, key: str) -> str | None:

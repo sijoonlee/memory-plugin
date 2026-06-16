@@ -38,6 +38,16 @@ Call `memory_feedback` only for memories you actually considered.
 
 Do not send feedback for every returned memory automatically.
 
+## Inspecting the store
+
+When the user asks what is stored or about store health, use the read-only inspection tools instead of switching to a terminal:
+
+- `memory_status` reports event backlog, session segments, candidate counts, and memory counts by status.
+- `memory_list` browses stored memories by status (`active`, `stale`, ...); this is a listing, not the semantic `memory_search`.
+- `candidate_list` lists pipeline-proposed candidates by status (`pending_review`, ...).
+
+These are read-only. Call them only when the user asks to see what exists or wants a health check, not during normal task work. Approving, rejecting, or processing candidates still happens through the operator workflow below.
+
 ## Operator workflow
 
 Use these commands from the plugin/project root:

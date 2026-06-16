@@ -1006,6 +1006,48 @@ only the Memory MCP entries. Hooks are intentionally not referenced from
   - source session/segment
 - keep raw full-segment display opt-in because hook logs can be noisy or sensitive
 
+### Milestone 14: Shared Online Memory Server (BE + FE)
+
+This milestone graduates Memory MCP from a single-user local tool into a shared,
+online service used by multiple developers. It is explicitly post-V1 (see
+"Multi-user cloud service" under Non-Goals For V1) and should not begin until the
+local MVP and adapter/packaging milestones are stable.
+
+Guiding principle: keep all behavior in the service/store layer so the MCP server,
+CLI, and a new HTTP backend are thin front doors over the same logic. Do not push
+agent- or transport-specific assumptions into core retrieval, scoring, or review.
+
+- backend service:
+  - extract a backend API (REST or GraphQL) over the existing service functions
+    (`mcp_server/service.py`, `operator.py`) without forking business logic
+  - replace file-based SQLite + LanceDB with a concurrent server datastore
+    (for example Postgres + pgvector or a hosted vector store)
+  - keep a migration/export path from local `.memory-mcp` stores into the server
+    (reuse JSONL import/export)
+  - make the MCP server connect to the backend (remote MCP over HTTP, or MCP as a
+    thin client of the backend API) instead of reading local files directly
+- identity, scoping, and access control:
+  - add developer/user identity on events, feedback, memories, and candidates
+  - extend scoping beyond project to support per-user, per-project, and explicitly
+    shared memories
+  - add authentication and authorization (who can read, create, approve, delete)
+  - preserve provenance and audit trails across users
+- multi-writer correctness:
+  - replace single-writer file assumptions with concurrent-safe transactions
+  - handle concurrent dedupe-on-create and candidate approval without races
+- frontend:
+  - build a dedicated web UI for search, browse, candidate review, and store health
+  - reuse the read-only inspection contracts (`memory_status`, `memory_list`,
+    `candidate_list`) as the first read API, and the review service for actions
+  - treat the local review UI (Milestone 5A) as throwaway once the FE exists
+- operations:
+  - deployment, backups, observability, and rate limiting for a shared service
+  - privacy controls and tenant isolation; redaction (Milestone 11) becomes mandatory
+- compatibility:
+  - keep the local single-user mode working for offline/solo use
+  - keep the normal operator workflow verbs (`status` / `process` / `review`)
+    available against the backend
+
 ## Non-Goals For V1
 
 - Full agent runtime

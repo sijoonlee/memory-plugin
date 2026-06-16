@@ -9,10 +9,13 @@ from mcp.server.fastmcp import FastMCP
 from memory_mcp.core.embeddings import LangChainHuggingFaceEmbedder
 from memory_mcp.core.events import EventStore
 from memory_mcp.mcp_server.service import (
+    candidate_list as candidate_list_tool,
     memory_create as create_memory_tool,
     memory_feedback as feedback_memory_tool,
     memory_get as get_memory_tool,
+    memory_list as list_memory_tool,
     memory_search as search_memory_tool,
+    memory_status as status_memory_tool,
 )
 from memory_mcp.core.store import LocalMemoryStore
 
@@ -119,6 +122,34 @@ def build_mcp(
             context=context,
             event_store=events,
         )
+
+    @mcp.tool()
+    def memory_status() -> dict[str, Any]:
+        """Report memory-store health: event backlog, session segments,
+        candidate counts, and memory counts by status. Read-only. Call only
+        when the user asks about what is stored or store health, not during
+        normal task work."""
+
+        return status_memory_tool(memory_store, events)
+
+    @mcp.tool()
+    def memory_list(status: str = "active", limit: int = 20) -> dict[str, Any]:
+        """Browse stored memories by status (active, stale, superseded,
+        invalid, rejected, archived). Read-only listing, distinct from the
+        semantic memory_search. Call only when the user asks to see what
+        memories exist."""
+
+        return list_memory_tool(memory_store, status=status, limit=limit)
+
+    @mcp.tool()
+    def candidate_list(
+        status: str = "pending_review", limit: int = 20
+    ) -> dict[str, Any]:
+        """List pipeline-proposed memory candidates by status (pending_review,
+        approved, rejected, merged). Read-only. Approving or rejecting
+        candidates happens in the review workflow, not here."""
+
+        return candidate_list_tool(events, status=status, limit=limit)
 
     return mcp
 
