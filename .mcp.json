@@ -1,15 +1,11 @@
 {
   "mcpServers": {
     "memory-mcp": {
-      "command": "/Users/sijoon.lee/.local/bin/uv",
+      "command": "./install-commands/scripts/memory-mcp-server.sh",
       "args": [
-        "--directory",
-        "/Users/sijoon.lee/Documents/codebase/memory-plugin",
-        "run",
-        "memory-mcp-server"
       ],
       "env": {
-        "MEMORY_MCP_ROOT": "/Users/sijoon.lee/Documents/codebase/memory-plugin/.memory-mcp"
+        "MEMORY_MCP_ROOT": ".memory-mcp"
       }
     }
   }

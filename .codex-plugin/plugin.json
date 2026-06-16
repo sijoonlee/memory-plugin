@@ -1,0 +1,35 @@
+{
+  "name": "memory-mcp",
+  "version": "0.1.0",
+  "description": "Local reusable memory retrieval, feedback, and review workflow for Codex.",
+  "author": {
+    "name": "Memory MCP"
+  },
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "mcp",
+    "codex",
+    "retrieval"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Memory MCP",
+    "shortDescription": "Local reusable memory for Codex coding work.",
+    "longDescription": "Adds a local Memory MCP server, Codex usage guidance, event capture examples, and operator workflow helpers for processing and reviewing durable project memories.",
+    "developerName": "Memory MCP",
+    "category": "Productivity",
+    "capabilities": [
+      "MCP",
+      "Skills",
+      "Local"
+    ],
+    "defaultPrompt": [
+      "Search project memory before editing.",
+      "Review pending memory candidates.",
+      "Process captured Memory MCP events."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

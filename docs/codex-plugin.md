@@ -1,0 +1,93 @@
+# Codex Plugin Packaging
+
+This repository is the Memory MCP plugin root.
+
+## Structure
+
+```text
+.codex-plugin/plugin.json  plugin manifest
+.mcp.json                  MCP server registration
+skills/memory-mcp/         Codex-facing usage guidance
+hooks/codex-hooks.json     event-capture hook config
+install-commands/setup-codex-plugin.sh  guided all-in-one setup
+install-commands/scripts/download-embedding-model.sh  embedding model warmup helper
+install-commands/scripts/install-codex-plugin.sh  local Codex plugin installer
+install-commands/scripts/check-memory-status.sh  status helper
+```
+
+The core Python app remains usable without installing the plugin.
+
+## Setup
+
+Run the guided setup command from any directory:
+
+```bash
+install-commands/setup-codex-plugin.sh
+```
+
+The setup command installs the local Codex plugin, downloads and warms the
+embedding model, stages Codex hooks for review, and prints the current memory
+status.
+
+## Individual Commands
+
+The setup command is the normal path. The lower-level commands remain available
+for repair or debugging.
+
+Download only the embedding model:
+
+```bash
+install-commands/scripts/download-embedding-model.sh
+```
+
+Install only the local Codex plugin registration:
+
+```bash
+install-commands/scripts/install-codex-plugin.sh
+```
+
+The plugin installer:
+
+1. creates `~/plugins/memory-mcp` as a symlink to this repo
+2. creates or updates `~/.agents/plugins/marketplace.json`
+3. runs `codex plugin add memory-mcp@<marketplace-name>`
+
+Set these environment variables to override defaults:
+
+```bash
+PLUGIN_SOURCE_ROOT=/path/to/plugins \
+MARKETPLACE_PATH=/path/to/marketplace.json \
+CODEX_BIN=/path/to/codex \
+install-commands/scripts/install-codex-plugin.sh
+```
+
+Start a new Codex thread/session after installation so plugin skills and MCP config are reloaded.
+
+## MCP Server
+
+The plugin manifest points to `.mcp.json`, which starts the server through:
+
+```bash
+install-commands/scripts/memory-mcp-server.sh
+```
+
+The wrapper resolves the project root from its own path and then runs:
+
+```bash
+uv --directory <project-root> run memory-mcp-server
+```
+
+Set `MEMORY_MCP_ROOT` to override the default local store path.
+
+## Hooks
+
+Hooks are packaged at `hooks/codex-hooks.json`. `install-commands/setup-codex-plugin.sh`
+stages that config at `.codex/hooks.json` so Codex can review it before use.
+
+## Local Workflow
+
+```bash
+uv run memory-mcp status
+uv run memory-mcp process
+uv run memory-mcp review
+```

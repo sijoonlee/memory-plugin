@@ -882,28 +882,36 @@ Status: complete.
 
 ### Milestone 9: Codex Plugin Packaging
 
-- create a plugin wrapper so Memory MCP can be installed and used from Codex as a local plugin
-- include `.codex-plugin/plugin.json` with validated plugin metadata
-- include `.mcp.json` that registers the `memory-mcp` MCP stdio server:
-  - command: `uv`
-  - args: `--directory <project-root> run memory-mcp-server`
-  - env: `MEMORY_MCP_ROOT=<project-root>/.memory-mcp`
-- include Codex hook configuration for event collection:
+Status: complete.
+
+- [x] create a plugin wrapper so Memory MCP can be installed and used from Codex as a local plugin
+- [x] include `.codex-plugin/plugin.json` with validated plugin metadata
+- [x] include `.mcp.json` that registers the `memory-mcp` MCP stdio server:
+  - command: `./install-commands/scripts/memory-mcp-server.sh`
+  - wrapper resolves the plugin/project root and runs `uv --directory <project-root> run memory-mcp-server`
+  - env: `MEMORY_MCP_ROOT=.memory-mcp`
+- [x] include Codex hook configuration for event collection:
   - `UserPromptSubmit` -> `memory-mcp-event append --quiet --event-type user_prompt`
   - `PostToolUse` -> `memory-mcp-event append --quiet --event-type tool_result`
   - `Stop` -> `memory-mcp-event append --quiet --event-type turn_stop`
-- include a Memory MCP skill that teaches Codex:
+- [x] include a Memory MCP skill that teaches Codex:
   - search memory when prior project context may help
   - create explicit memories only for durable reusable lessons
   - call `memory_feedback` only when a memory was actually used, helpful, stale, incorrect, or contradicted
   - use `memory-mcp status`, `memory-mcp process`, and `memory-mcp review` for the operator workflow
-- include setup/status helper scripts:
-  - install dependencies
+- [x] include setup/status helper scripts:
+  - install/register the local Codex plugin
   - warm the local embedding model
+  - stage Codex hooks for review
   - print current memory status
-- validate plugin manifest with plugin tooling
-- document install/update flow for local development
-- keep core app usable without the plugin wrapper
+- [x] validate plugin manifest with plugin tooling
+- [x] document install/update flow for local development
+- [x] keep core app usable without the plugin wrapper
+
+Note: the plugin packages Codex hook configuration under `hooks/codex-hooks.json`
+as opt-in setup material. It is intentionally not referenced from
+`.codex-plugin/plugin.json`, because hook activation runs commands automatically
+on Codex lifecycle events.
 
 ### Milestone 10: Claude Code Plugin Packaging
 
