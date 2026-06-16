@@ -12,7 +12,7 @@ hooks/codex-hooks.json     event-capture hook config
 install-commands/setup-codex-plugin.sh  guided all-in-one setup
 install-commands/uninstall-codex-plugin.sh  local plugin uninstall helper
 install-commands/scripts/download-embedding-model.sh  embedding model warmup helper
-install-commands/scripts/install-codex-plugin.sh  local Codex plugin installer
+install-commands/scripts/register-codex-plugin.sh  local Codex plugin registration helper
 install-commands/scripts/check-memory-status.sh  status helper
 ```
 
@@ -41,13 +41,13 @@ Download only the embedding model:
 install-commands/scripts/download-embedding-model.sh
 ```
 
-Install only the local Codex plugin registration:
+Register only the local Codex plugin:
 
 ```bash
-install-commands/scripts/install-codex-plugin.sh
+install-commands/scripts/register-codex-plugin.sh
 ```
 
-The plugin installer:
+The plugin registration helper:
 
 1. creates `~/plugins/memory-mcp` as a symlink to this repo
 2. creates or updates `~/.agents/plugins/marketplace.json`
@@ -59,7 +59,7 @@ Set these environment variables to override defaults:
 PLUGIN_SOURCE_ROOT=/path/to/plugins \
 MARKETPLACE_PATH=/path/to/marketplace.json \
 CODEX_BIN=/path/to/codex \
-install-commands/scripts/install-codex-plugin.sh
+install-commands/scripts/register-codex-plugin.sh
 ```
 
 Start a new Codex thread/session after installation so plugin skills and MCP config are reloaded.

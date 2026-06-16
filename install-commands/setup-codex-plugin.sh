@@ -9,7 +9,7 @@ HOOK_TARGET="${PROJECT_ROOT}/.codex/hooks.json"
 echo "Setting up Memory MCP Codex plugin..."
 echo
 
-"${INSTALL_DIR}/scripts/install-codex-plugin.sh"
+"${INSTALL_DIR}/scripts/register-codex-plugin.sh"
 
 echo
 "${INSTALL_DIR}/scripts/download-embedding-model.sh"
