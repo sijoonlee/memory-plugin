@@ -9,6 +9,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from memory_mcp.core.redaction import redact_payload
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -86,10 +88,12 @@ class EventStore:
         *,
         created_at: datetime | None = None,
     ) -> EventRecord:
+        payload = event.model_dump()
+        payload["payload"] = redact_payload(payload["payload"])
         record = EventRecord(
             id=f"evt_{uuid.uuid4().hex}",
             created_at=created_at or utc_now(),
-            **event.model_dump(),
+            **payload,
         )
         with self._connect() as conn:
             conn.execute(

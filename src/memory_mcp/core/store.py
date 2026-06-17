@@ -16,6 +16,7 @@ from memory_mcp.core.models import (
     MemoryRecord,
     MemorySearchResult,
 )
+from memory_mcp.core.redaction import redact_text
 
 CLEAR_DUPLICATE_SEMANTIC_THRESHOLD = 0.92
 POSSIBLE_DUPLICATE_SEMANTIC_THRESHOLD = 0.82
@@ -32,6 +33,7 @@ class LocalMemoryStore:
         self._init_sqlite()
 
     def create_memory(self, memory: MemoryCreate) -> MemoryRecord:
+        memory = _redact_memory_create(memory)
         content_for_embedding = build_content_for_embedding(
             what_happened=memory.what_happened,
             when_useful=memory.when_useful,
@@ -484,6 +486,17 @@ class LocalMemoryStore:
             _dt_to_text(record.updated_at),
             record.id,
         )
+
+
+def _redact_memory_create(memory: MemoryCreate) -> MemoryCreate:
+    return memory.model_copy(
+        update={
+            "what_happened": redact_text(memory.what_happened),
+            "when_useful": redact_text(memory.when_useful),
+            "helpful_explanation": redact_text(memory.helpful_explanation),
+            "tags": [redact_text(tag) for tag in memory.tags],
+        }
+    )
 
 
 def _distance_to_similarity(distance: float) -> float:

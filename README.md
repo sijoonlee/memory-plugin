@@ -524,6 +524,25 @@ Memory creation runs a dedupe check before inserting:
 Dedupe uses vector similarity plus field overlap across lesson, situation,
 action, and tags. Hooks and event appenders do not dedupe events.
 
+## Redaction And Secret Safety
+
+Inbound text is scrubbed for common credential shapes at two chokepoints, so
+secrets do not land in the store:
+
+- `EventStore.append_event` redacts event payloads before they are written to
+  `events.sqlite`. This covers hook/event ingestion and everything the pipeline
+  later derives from those events (session segments, candidates).
+- `LocalMemoryStore.create_memory` redacts memory fields before embedding or
+  storage. This covers the direct `memory_create` MCP tool / CLI path and
+  approved candidates.
+
+Redaction is best-effort, not a complete secret scanner. It combines key-based
+redaction (dict values under sensitive keys such as `password`, `token`,
+`api_key`, `authorization` are dropped) with pattern-based redaction of known
+shapes (PEM private key blocks, bearer tokens, OpenAI/GitHub/AWS/Slack token
+formats, and inline `key=value` secrets). Redacted spans are replaced with
+`[REDACTED]`. See `src/memory_mcp/core/redaction.py`.
+
 ## Tests
 
 Run tests:

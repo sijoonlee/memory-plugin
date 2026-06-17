@@ -944,16 +944,30 @@ because the guidance is agent-agnostic. Unlike Codex, which stages a standalone
 only the Memory MCP entries. Hooks are intentionally not referenced from
 `.claude-plugin/plugin.json`, so installing the plugin never auto-runs commands.
 
-### Milestone 11: Redaction And Secret Safety
+### Milestone 11: Redaction And Secret Safety (done)
 
-- add core redaction module for text and nested JSON-like payloads
-- redact hook/event payloads before writing `events.sqlite`
-- redact explicit `memory_create` fields before embedding or storage
-- redact pipeline-created memory candidates before quality gates
-- reject high-risk candidates such as private key blocks or empty-after-redaction memories
-- store redaction metadata in memory source metadata and event payload metadata
-- add tests for API keys, bearer tokens, private keys, password fields, and nested payloads
-- support deleting memories by id
+Shipped a simplified, best-effort version focused on two chokepoints that cover
+every write path into the store. Done:
+
+- added core redaction module (`core/redaction.py`) for text and nested
+  JSON-like payloads, combining key-based redaction (sensitive dict keys) with
+  pattern-based redaction (PEM private key blocks, bearer tokens,
+  OpenAI/GitHub/AWS/Slack token shapes, inline `key=value` secrets); redacted
+  spans become `[REDACTED]`
+- redact event payloads in `EventStore.append_event` before writing
+  `events.sqlite` (covers hook/event ingestion and everything the pipeline
+  derives from those events, including candidates)
+- redact `memory_create` fields in `LocalMemoryStore.create_memory` before
+  embedding or storage (covers the direct MCP/CLI path and approved candidates,
+  since approval routes through `create_memory`)
+- added tests for API keys, bearer tokens, private keys, password fields, and
+  nested payloads (`tests/test_redaction.py`)
+
+Deliberately deferred to keep the milestone simple:
+
+- rejecting high-risk candidates (private key blocks, empty-after-redaction)
+- storing redaction metadata in memory source / event payload metadata
+- deleting memories by id (moved to Milestone 15)
 
 ### Milestone 12: Incremental Event CDC For Sessionization
 
@@ -1047,6 +1061,26 @@ agent- or transport-specific assumptions into core retrieval, scoring, or review
   - keep the local single-user mode working for offline/solo use
   - keep the normal operator workflow verbs (`status` / `process` / `review`)
     available against the backend
+
+### Milestone 15: Delete Memory By Id
+
+- add `delete_memory(memory_id)` to `LocalMemoryStore` that removes the record
+  from both stores: the SQLite `memories` row and the LanceDB vector row
+- return a clear result for unknown ids (no-op / `False`) versus a successful
+  delete, so callers can distinguish missing from deleted
+- expose deletion through the operator/CLI surface (`memory-mcp delete <id>`)
+  and as a `memory_delete` MCP tool in `mcp_server/service.py` and `server.py`
+- decide and document semantics versus existing status transitions: hard delete
+  is permanent and bypasses the `invalid` / `stale` / `superseded` audit states,
+  so prefer status changes for normal lifecycle and reserve delete for secret
+  removal and explicit user requests
+- handle related rows: leave `feedback_events` for audit or clean them up, and
+  document the choice
+- add tests proving:
+  - delete removes the row from SQLite and the vector table
+  - deleted memories no longer appear in search or `get`
+  - deleting an unknown id is a safe no-op
+  - deleting one memory does not affect others
 
 ## Non-Goals For V1
 
