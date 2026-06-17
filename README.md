@@ -196,6 +196,24 @@ Options:
 
 - `--root`: optional memory store root, default `.memory-mcp`
 
+### `delete`
+
+Permanently delete one memory by id:
+
+```bash
+uv run memory-mcp delete mem_ff16a834f1274d8fb3611cbd5f7dc9b5
+```
+
+This is a hard delete: it removes the memory from both the metadata and vector
+stores, bypassing the `stale` / `superseded` / `invalid` audit statuses. Prefer
+`memory_feedback` for normal lifecycle changes; use delete for secret removal or
+an explicit request to forget a memory. Exits non-zero for an unknown id.
+`feedback_events` rows are left in place for audit.
+
+Options:
+
+- `--root`: optional memory store root, default `.memory-mcp`
+
 ### `export`
 
 Export memories as JSONL:
@@ -221,6 +239,7 @@ The server exposes these MCP tools:
 - `memory_search`
 - `memory_get`
 - `memory_create`
+- `memory_delete`
 - `memory_feedback`
 
 By default, the server stores data under `.memory-mcp` relative to the current
@@ -378,8 +397,8 @@ core storage, retrieval, and the review UI contain no agent-specific logic.
      -- uv --directory "$(pwd)" run memory-mcp-server
    ```
 
-   This exposes `memory_search`, `memory_get`, `memory_create`, and
-   `memory_feedback` to Claude Code.
+   This exposes `memory_search`, `memory_get`, `memory_create`,
+   `memory_delete`, and `memory_feedback` to Claude Code.
 
    Alternatively, commit a project-scoped `.mcp.json` at the repo root:
 

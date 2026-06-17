@@ -129,6 +129,19 @@ class OperatorWorkflow:
             status=self.status(),
         )
 
+    def rebuild_sessions(
+        self,
+        *,
+        idle_after_seconds: int = 600,
+        max_segment_gap_seconds: int = 7200,
+    ) -> dict[str, object]:
+        result = SessionWorker(
+            event_store=self.event_store,
+            idle_after_seconds=idle_after_seconds,
+            max_segment_gap_seconds=max_segment_gap_seconds,
+        ).rebuild()
+        return {"sessions": asdict(result), "status": self.status().to_dict()}
+
 
 class _NoopEmbedder:
     def embed_text(self, text: str) -> list[float]:

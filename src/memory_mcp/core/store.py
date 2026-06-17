@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from memory_mcp.core import checkpoints
 from memory_mcp.core.content import build_content_for_embedding
 from memory_mcp.core.embeddings import Embedder
 from memory_mcp.core.models import (
@@ -77,6 +78,28 @@ class LocalMemoryStore:
         if row is None:
             return None
         return MemoryRecord.model_validate_json(row["record_json"])
+
+    def delete_memory(self, memory_id: str) -> bool:
+        """Permanently remove a memory from both the metadata and vector stores.
+
+        This is a hard delete: it bypasses the ``stale`` / ``superseded`` /
+        ``invalid`` audit statuses, so prefer ``record_feedback`` for normal
+        lifecycle changes and reserve delete for secret removal or explicit user
+        requests. ``feedback_events`` rows are intentionally left for audit.
+        Returns ``True`` when a memory was deleted, ``False`` for an unknown id.
+        """
+
+        with self._connect_sqlite() as conn:
+            deleted = (
+                conn.execute(
+                    "DELETE FROM memories WHERE id = ?",
+                    (memory_id,),
+                ).rowcount
+                > 0
+            )
+        if deleted:
+            self._delete_vector(memory_id)
+        return deleted
 
     def search_memories(
         self,
@@ -245,39 +268,15 @@ class LocalMemoryStore:
                 ON feedback_events(memory_id)
                 """
             )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS checkpoints (
-                    name TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
+            checkpoints.create_checkpoints_table(conn)
 
     def get_checkpoint(self, name: str) -> str | None:
         with self._connect_sqlite() as conn:
-            row = conn.execute(
-                "SELECT value FROM checkpoints WHERE name = ?",
-                (name,),
-            ).fetchone()
-        if row is None:
-            return None
-        return str(row["value"])
+            return checkpoints.get_checkpoint(conn, name)
 
     def set_checkpoint(self, name: str, value: str) -> None:
-        now = datetime.now(timezone.utc)
         with self._connect_sqlite() as conn:
-            conn.execute(
-                """
-                INSERT INTO checkpoints (name, value, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(name) DO UPDATE SET
-                    value = excluded.value,
-                    updated_at = excluded.updated_at
-                """,
-                (name, value, _dt_to_text(now)),
-            )
+            checkpoints.set_checkpoint(conn, name, value)
 
     def _connect_sqlite(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.sqlite_path)
@@ -311,6 +310,12 @@ class LocalMemoryStore:
             db.create_table("memories", data=[row])
             return
         db.open_table("memories").add([row])
+
+    def _delete_vector(self, memory_id: str) -> None:
+        db = self._connect_lancedb()
+        if "memories" not in self._table_names(db):
+            return
+        db.open_table("memories").delete(f"id = '{memory_id}'")
 
     def _insert_memory_record(self, record: MemoryRecord) -> None:
         with self._connect_sqlite() as conn:

@@ -26,6 +26,7 @@ def test_mcp_server_exposes_tools(tmp_path) -> None:
             "memory_search",
             "memory_get",
             "memory_create",
+            "memory_delete",
             "memory_feedback",
             "memory_status",
             "memory_list",

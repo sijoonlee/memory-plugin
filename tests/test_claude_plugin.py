@@ -22,12 +22,11 @@ def test_plugin_manifest_is_valid() -> None:
     assert manifest["skills"] == "./skills/"
 
 
-def test_plugin_manifest_does_not_auto_enable_hooks() -> None:
-    # Hooks run commands automatically, so installing the plugin must not wire
-    # them in. The manifest must not reference the packaged hook config.
-    raw = (REPO_ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8")
-    assert "hooks" not in json.loads(raw)
-    assert "claude-hooks.json" not in raw
+def test_plugin_manifest_declares_packaged_hooks() -> None:
+    # The plugin packages its lifecycle hooks via the manifest; whether they run
+    # is gated by the user enabling/trusting the plugin in Claude Code.
+    manifest = _load_json(".claude-plugin/plugin.json")
+    assert manifest["hooks"] == "./hooks/claude-hooks.json"
 
 
 def test_mcp_registration_points_at_wrapper() -> None:

@@ -969,31 +969,110 @@ Deliberately deferred to keep the milestone simple:
 - storing redaction metadata in memory source / event payload metadata
 - deleting memories by id (moved to Milestone 15)
 
-### Milestone 12: Incremental Event CDC For Sessionization
+### Milestone 12: Incremental Event CDC For Sessionization (done)
 
-- stop using full-table event scans for normal session refresh
-- add a sessionization checkpoint, for example `session_worker_last_event_created_at`
-  plus a tie-breaker event id
-- process only events newer than the checkpoint in normal processing pipeline runs
-- maintain session aggregate rows incrementally as events arrive:
-  - project
-  - session id
-  - current segment id
-  - current segment index
-  - first event time
-  - last event time
-  - event count
-  - status
-- split a segment when the new event gap exceeds `max_segment_gap`
-- mark existing open segments idle with a targeted query on `last_event_at`, not by
-  rescanning all events
-- keep a manual backfill command for migrations and repair, but make it explicit
-- make session refresh incremental inside `memory-mcp process`, or add a clear repair command later
-- add tests proving:
-  - the second refresh reads only new events
-  - same timestamp events are handled by event id tie-breaker
-  - long gaps create new segments
-  - idle marking does not require scanning event payloads
+Make `SessionWorker.run_once` cost O(new events since last run) instead of
+O(all events ever), while keeping `session_segments` as the single source of
+truth and staying crash-safe across short-lived `memory-mcp process` runs.
+
+Design decisions settled during planning:
+
+- **Reuse `session_segments`, do not add a separate aggregate table.** The
+  segment rows already persist the aggregate the plan wants maintained
+  (`event_count`, `first_event_at`, `last_event_at`, `segment_index`, `status`).
+  The "current open segment" is found with an indexed lookup
+  (`ORDER BY segment_index DESC LIMIT 1`) and cached in a per-run dict; the only
+  new persistent state is the checkpoint cursor.
+- **Cursor, not per-row flags.** Track a single high-water mark
+  `(last_event_created_at, last_event_id)` for the `session_worker`; read only
+  events strictly after it. The event id is the tie-breaker for equal
+  timestamps. This is separate from the `events.processed_at` flags the
+  EventWorker uses.
+- **Checkpoint lives on `events.sqlite`.** Add a `checkpoints` table to the
+  EventStore so the cursor advance commits in the same transaction as the
+  `session_segments` writes (cross-database transactions are not available).
+  Leave the existing `memory.sqlite` decay checkpoint where it is; factor the
+  get/set logic into one shared helper.
+- **Crash-safety via atomic batch.** Segment writes plus the cursor advance must
+  commit in one transaction so an interrupted run replays cleanly with no
+  double-counting. This requires a run-scoped connection/transaction in
+  `EventStore` (currently one auto-committing connection per method).
+
+Two ratified behavior changes versus the full-scan version:
+
+- late events arriving after a segment is already terminal open a *new* segment
+  instead of being silently dropped (improvement)
+- incremental refresh assumes a session's events arrive time-ordered; anomalies
+  are repaired with the explicit rebuild command (the full scan was naturally
+  order-independent)
+
+#### Milestone 12A: Schema And Checkpoint Plumbing (done)
+
+- add a `checkpoints` table to `EventStore` (`name`, `value`, `updated_at`) plus
+  `get_checkpoint` / `set_checkpoint(name, value, *, conn=None)`
+- factor checkpoint get/set into a shared helper reused by `LocalMemoryStore`
+  and `EventStore`
+- add index `idx_events_created_id` on `events(created_at, id)` for the cursor
+  scan, and `idx_session_segments_session` on
+  `session_segments(project, session_id, segment_index)` for the latest-segment
+  lookup
+- add a run-scoped `EventStore.transaction()` context manager and make the
+  touched writers accept an optional `conn=`
+
+#### Milestone 12B: Incremental Read Path (done)
+
+- add `list_events_after(created_at, event_id, *, limit)` using
+  `WHERE created_at > ? OR (created_at = ? AND id > ?) ORDER BY created_at, id`
+- add `get_latest_segment_for_session(project, session_id)`
+- keep the existing full-scan `_build_segments` / `_make_segment` as the backfill
+  implementation and as the parity-test oracle
+- add a parity test: incremental output equals the full rebuild for a stream
+
+#### Milestone 12C: Incremental `run_once` (done)
+
+- rewrite `run_once` to walk events after the cursor in batches, seeding a
+  per-run `dict[(project, session_id) -> open segment]` lazily from the DB,
+  extending or splitting in memory, and flushing segments plus the cursor in one
+  transaction per sub-batch
+- split when the new-event gap exceeds `max_segment_gap`, when the predecessor
+  segment is terminal, or when the session is new
+- on first run with no checkpoint, auto-backfill via the full-scan path and set
+  the cursor to the high-water mark (seamless migration for existing stores)
+
+#### Milestone 12D: Idle Marking Without Payload Scan (done)
+
+Folded into 12C because `run_once` cannot be correct without it (quiescent
+sessions would never be marked idle, so extraction would never fire).
+
+- added `mark_open_segments_idle(threshold)` as a targeted
+  `UPDATE session_segments SET status='idle' WHERE status='open' AND last_event_at <= ?`
+  using the existing `(status, last_event_at)` index
+- run after the cursor walk; the flipped count feeds `SessionWorkerResult`
+
+#### Milestone 12E: Explicit Rebuild/Repair Command (done)
+
+- added a `rebuild-sessions` operator/CLI verb (`OperatorWorkflow.rebuild_sessions`
+  / `SessionWorker.rebuild`) that clears non-terminal segments via
+  `EventStore.delete_non_terminal_session_segments`, replays through the
+  full-scan builder, and resets the cursor to the high-water mark
+- keeps already-extracted terminal segments for audit; it is the escape hatch
+  for out-of-order events and the migration/repair path
+
+#### Milestone 12F: Tests (done)
+
+- the second refresh reads only new events (`scanned_events == 0`) —
+  `test_session_worker_cdc.py`
+- same-timestamp events are handled by the event id tie-breaker —
+  `test_event_cdc_read.py`
+- long gaps create new segments incrementally — `test_session_worker_cdc.py`
+- idle marking depends only on segment rows, not event payloads —
+  `test_session_rebuild.py`
+- resume idempotency: interrupt before the cursor commit, replay, no
+  double-count — `test_session_worker_cdc.py`
+- a late event after a terminal segment opens a new segment —
+  `test_session_worker_cdc.py`
+- parity: incremental output equals the full backfill for a stream —
+  `test_session_worker_cdc.py`
 
 ### Milestone 13: Candidate Merge And Rich Dashboard Workflow
 
@@ -1062,25 +1141,20 @@ agent- or transport-specific assumptions into core retrieval, scoring, or review
   - keep the normal operator workflow verbs (`status` / `process` / `review`)
     available against the backend
 
-### Milestone 15: Delete Memory By Id
+### Milestone 15: Delete Memory By Id (done)
 
-- add `delete_memory(memory_id)` to `LocalMemoryStore` that removes the record
-  from both stores: the SQLite `memories` row and the LanceDB vector row
-- return a clear result for unknown ids (no-op / `False`) versus a successful
-  delete, so callers can distinguish missing from deleted
-- expose deletion through the operator/CLI surface (`memory-mcp delete <id>`)
-  and as a `memory_delete` MCP tool in `mcp_server/service.py` and `server.py`
-- decide and document semantics versus existing status transitions: hard delete
-  is permanent and bypasses the `invalid` / `stale` / `superseded` audit states,
-  so prefer status changes for normal lifecycle and reserve delete for secret
-  removal and explicit user requests
-- handle related rows: leave `feedback_events` for audit or clean them up, and
-  document the choice
-- add tests proving:
-  - delete removes the row from SQLite and the vector table
-  - deleted memories no longer appear in search or `get`
-  - deleting an unknown id is a safe no-op
-  - deleting one memory does not affect others
+- added `LocalMemoryStore.delete_memory(memory_id)` removing the SQLite
+  `memories` row and the LanceDB vector row; returns `True` on delete, `False`
+  for an unknown id
+- exposed via the CLI (`memory-mcp delete <id>`, exits non-zero when unknown)
+  and a `memory_delete` MCP tool (`mcp_server/service.py` + `server.py`)
+- semantics documented: hard delete is permanent and bypasses the `invalid` /
+  `stale` / `superseded` audit states, so it is reserved for secret removal and
+  explicit user requests; `record_feedback` remains the normal lifecycle path
+- `feedback_events` rows are intentionally left for audit
+- tests (`tests/test_delete_memory.py`): removal from both SQLite and the vector
+  table (verified via search), unknown id is a safe no-op, deleting one memory
+  leaves others intact, and the service wrapper reports the outcome
 
 ## Non-Goals For V1
 

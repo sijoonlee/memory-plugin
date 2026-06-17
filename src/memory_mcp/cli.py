@@ -56,6 +56,14 @@ def get(memory_id: str, root: Path = typer.Option(Path(".memory-mcp"))) -> None:
 
 
 @app.command()
+def delete(memory_id: str, root: Path = typer.Option(Path(".memory-mcp"))) -> None:
+    deleted = _store(root).delete_memory(memory_id)
+    typer.echo(json.dumps({"deleted": deleted, "memory_id": memory_id}))
+    if not deleted:
+        raise typer.Exit(1)
+
+
+@app.command()
 def search(
     query: str,
     limit: int = typer.Option(5),
@@ -171,6 +179,29 @@ def operator_process(
         apply_decay=decay,
     )
     typer.echo(json.dumps(result.to_dict(), indent=2))
+
+
+@app.command("rebuild-sessions")
+def operator_rebuild_sessions(
+    root: Path = typer.Option(Path(".memory-mcp")),
+    idle_after: int = typer.Option(
+        600,
+        min=0,
+        help="Seconds with no events before a segment is considered idle.",
+    ),
+    max_gap: int = typer.Option(
+        7200,
+        min=1,
+        help="Seconds between events before a new segment starts.",
+    ),
+) -> None:
+    """Clear non-terminal session segments and rebuild them from a full scan."""
+
+    result = OperatorWorkflow(root=root).rebuild_sessions(
+        idle_after_seconds=idle_after,
+        max_segment_gap_seconds=max_gap,
+    )
+    typer.echo(json.dumps(result, indent=2))
 
 
 @app.command("review")

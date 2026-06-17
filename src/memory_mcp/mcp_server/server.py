@@ -11,6 +11,7 @@ from memory_mcp.core.events import EventStore
 from memory_mcp.mcp_server.service import (
     candidate_list as candidate_list_tool,
     memory_create as create_memory_tool,
+    memory_delete as delete_memory_tool,
     memory_feedback as feedback_memory_tool,
     memory_get as get_memory_tool,
     memory_list as list_memory_tool,
@@ -96,6 +97,15 @@ def build_mcp(
             tags=tags,
             source=source,
         )
+
+    @mcp.tool()
+    def memory_delete(memory_id: str) -> dict[str, Any]:
+        """Permanently delete one memory by id. Hard delete: removes the memory
+        and its vector, bypassing the active/stale/superseded/invalid audit
+        states. Prefer memory_feedback for normal lifecycle; use delete for
+        secret removal or an explicit user request to forget a memory."""
+
+        return delete_memory_tool(memory_store, memory_id=memory_id)
 
     @mcp.tool()
     def memory_feedback(

@@ -110,6 +110,11 @@ def memory_create(
     return {"memory": record.model_dump(mode="json")}
 
 
+def memory_delete(store: LocalMemoryStore, memory_id: str) -> dict[str, Any]:
+    deleted = store.delete_memory(memory_id)
+    return {"deleted": deleted, "memory_id": memory_id}
+
+
 def memory_feedback(
     store: LocalMemoryStore,
     memory_id: str,

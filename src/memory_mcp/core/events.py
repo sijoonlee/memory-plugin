@@ -5,10 +5,13 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
+
+from contextlib import contextmanager
 
 from pydantic import BaseModel, Field
 
+from memory_mcp.core import checkpoints
 from memory_mcp.core.redaction import redact_payload
 
 
@@ -127,6 +130,38 @@ class EventStore:
             ).fetchall()
         return [_row_to_event(row) for row in rows]
 
+    def list_events_after(
+        self,
+        created_at: datetime | None,
+        event_id: str | None,
+        *,
+        limit: int,
+    ) -> list[EventRecord]:
+        """Return events strictly after the ``(created_at, id)`` cursor.
+
+        The event id is the tie-breaker for events sharing a timestamp. A ``None``
+        cursor reads from the beginning, so the same query serves both the first
+        backfill and steady-state incremental runs.
+        """
+
+        if created_at is None:
+            query = "SELECT * FROM events ORDER BY created_at, id LIMIT ?"
+            params: tuple[Any, ...] = (limit,)
+        else:
+            cursor = _dt_to_text(created_at)
+            query = """
+                SELECT *
+                FROM events
+                WHERE created_at > ?
+                   OR (created_at = ? AND id > ?)
+                ORDER BY created_at, id
+                LIMIT ?
+            """
+            params = (cursor, cursor, event_id or "", limit)
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [_row_to_event(row) for row in rows]
+
     def list_events_for_session_segment(
         self,
         segment: SessionSegmentRecord,
@@ -228,45 +263,60 @@ class EventStore:
             ).fetchone()
         return int(row["count"])
 
-    def upsert_session_segment(self, segment: SessionSegmentRecord) -> None:
-        with self._connect() as conn:
-            existing = conn.execute(
-                "SELECT status FROM session_segments WHERE id = ?",
-                (segment.id,),
-            ).fetchone()
-            status = segment.status
-            if existing is not None and existing["status"] in {
-                "processed",
-                "skipped",
-                "failed",
-            }:
-                status = existing["status"]
-            conn.execute(
-                """
-                INSERT INTO session_segments (
-                    id, project, session_id, segment_index, first_event_at,
-                    last_event_at, event_count, status, processed_at, error
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    first_event_at = excluded.first_event_at,
-                    last_event_at = excluded.last_event_at,
-                    event_count = excluded.event_count,
-                    status = excluded.status
-                """,
-                (
-                    segment.id,
-                    segment.project,
-                    segment.session_id,
-                    segment.segment_index,
-                    _dt_to_text(segment.first_event_at),
-                    _dt_to_text(segment.last_event_at),
-                    segment.event_count,
-                    status,
-                    _optional_dt_to_text(segment.processed_at),
-                    segment.error,
-                ),
+    def upsert_session_segment(
+        self,
+        segment: SessionSegmentRecord,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
+        if conn is not None:
+            self._upsert_session_segment(conn, segment)
+            return
+        with self._connect() as own:
+            self._upsert_session_segment(own, segment)
+
+    def _upsert_session_segment(
+        self,
+        conn: sqlite3.Connection,
+        segment: SessionSegmentRecord,
+    ) -> None:
+        existing = conn.execute(
+            "SELECT status FROM session_segments WHERE id = ?",
+            (segment.id,),
+        ).fetchone()
+        status = segment.status
+        if existing is not None and existing["status"] in {
+            "processed",
+            "skipped",
+            "failed",
+        }:
+            status = existing["status"]
+        conn.execute(
+            """
+            INSERT INTO session_segments (
+                id, project, session_id, segment_index, first_event_at,
+                last_event_at, event_count, status, processed_at, error
             )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                first_event_at = excluded.first_event_at,
+                last_event_at = excluded.last_event_at,
+                event_count = excluded.event_count,
+                status = excluded.status
+            """,
+            (
+                segment.id,
+                segment.project,
+                segment.session_id,
+                segment.segment_index,
+                _dt_to_text(segment.first_event_at),
+                _dt_to_text(segment.last_event_at),
+                segment.event_count,
+                status,
+                _optional_dt_to_text(segment.processed_at),
+                segment.error,
+            ),
+        )
 
     def list_session_segments(
         self,
@@ -292,6 +342,70 @@ class EventStore:
         if row is None:
             return None
         return _row_to_session_segment(row)
+
+    def get_latest_segment_for_session(
+        self,
+        project: str,
+        session_id: str,
+    ) -> SessionSegmentRecord | None:
+        """Return the highest-index segment for a session, or ``None``.
+
+        Used by the incremental worker to find the open segment a new event
+        should extend or split from, via ``idx_session_segments_session``.
+        """
+
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM session_segments
+                WHERE project = ? AND session_id = ?
+                ORDER BY segment_index DESC
+                LIMIT 1
+                """,
+                (project, session_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return _row_to_session_segment(row)
+
+    def mark_open_segments_idle(
+        self,
+        threshold: datetime,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> int:
+        """Flip ``open`` segments whose last event is at or before ``threshold``.
+
+        A targeted UPDATE backed by ``idx_session_segments_status``; it never
+        reads event payloads. Returns the number of segments flipped to idle.
+        """
+
+        sql = """
+            UPDATE session_segments
+            SET status = 'idle'
+            WHERE status = 'open' AND last_event_at <= ?
+        """
+        param = _dt_to_text(threshold)
+        if conn is not None:
+            return conn.execute(sql, (param,)).rowcount
+        with self._connect() as own:
+            return own.execute(sql, (param,)).rowcount
+
+    def delete_non_terminal_session_segments(self) -> int:
+        """Delete every non-terminal segment, keeping extracted ones for audit.
+
+        Used by the rebuild/repair path before replaying segments from scratch.
+        Returns the number of segments deleted.
+        """
+
+        with self._connect() as conn:
+            return conn.execute(
+                """
+                DELETE FROM session_segments
+                WHERE status NOT IN ('processed', 'skipped', 'failed')
+                """
+            ).rowcount
 
     def mark_session_segment_status(
         self,
@@ -417,6 +531,12 @@ class EventStore:
             )
             conn.execute(
                 """
+                CREATE INDEX IF NOT EXISTS idx_events_created_id
+                ON events(created_at, id)
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS session_segments (
                     id TEXT PRIMARY KEY,
                     project TEXT NOT NULL,
@@ -435,6 +555,12 @@ class EventStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_session_segments_status
                 ON session_segments(status, last_event_at)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_session_segments_session
+                ON session_segments(project, session_id, segment_index)
                 """
             )
             conn.execute(
@@ -468,11 +594,44 @@ class EventStore:
                 ON memory_candidates(status, created_at)
                 """
             )
+            checkpoints.create_checkpoints_table(conn)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.sqlite_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """Yield one connection whose writes commit (or roll back) atomically.
+
+        Used by the incremental session worker so segment writes and the cursor
+        advance land in a single transaction; an interrupted run replays cleanly.
+        """
+
+        conn = self._connect()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
+    def get_checkpoint(self, name: str) -> str | None:
+        with self._connect() as conn:
+            return checkpoints.get_checkpoint(conn, name)
+
+    def set_checkpoint(
+        self,
+        name: str,
+        value: str,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
+        if conn is not None:
+            checkpoints.set_checkpoint(conn, name, value)
+            return
+        with self._connect() as own:
+            checkpoints.set_checkpoint(own, name, value)
 
     def _insert_candidate(
         self,
