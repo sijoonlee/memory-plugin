@@ -194,6 +194,12 @@ def test_extraction_worker_skips_segment_when_no_memory_found(tmp_path) -> None:
     assert segment.error == "No reusable lesson."
     assert event_store.list_memory_candidates() == []
 
+    # The LLM's no_memory_reason is surfaced in the worker result, not just the DB.
+    assert len(result.skipped) == 1
+    assert result.skipped[0].segment_id == segment.id
+    assert result.skipped[0].session_id == "session-1"
+    assert result.skipped[0].reason == "No reusable lesson."
+
 
 def test_extraction_worker_can_target_one_idle_segment(tmp_path) -> None:
     event_store = EventStore(tmp_path / "memory")

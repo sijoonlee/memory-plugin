@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from memory_mcp.core.events import EventRecord, EventStore, MemoryCandidateCreate, SessionSegmentRecord
 from memory_mcp.pipeline.extractors import ExtractionResult, MemoryExtractor
+
+
+@dataclass(frozen=True)
+class SegmentOutcome:
+    segment_id: str
+    session_id: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -13,6 +20,10 @@ class ExtractionWorkerResult:
     failed_segments: int
     created_candidates: int
     remaining_idle_segments: int
+    # Why each non-processed segment produced no memory: skipped carries the
+    # LLM's no_memory_reason, failed carries the extraction error.
+    skipped: list[SegmentOutcome] = field(default_factory=list)
+    failed: list[SegmentOutcome] = field(default_factory=list)
 
 
 class ExtractionWorker:
@@ -32,9 +43,9 @@ class ExtractionWorker:
         segment_id: str | None = None,
     ) -> ExtractionWorkerResult:
         processed = 0
-        skipped = 0
-        failed = 0
         created = 0
+        skipped_outcomes: list[SegmentOutcome] = []
+        failed_outcomes: list[SegmentOutcome] = []
 
         if segment_id is None:
             segments = self.event_store.list_session_segments(status="idle")[:limit]
@@ -52,11 +63,14 @@ class ExtractionWorker:
                     result=result,
                 )
             except Exception as exc:  # pragma: no cover - defensive safety path
-                failed += 1
+                error = str(exc)
+                failed_outcomes.append(
+                    SegmentOutcome(segment.id, segment.session_id, error)
+                )
                 self.event_store.mark_session_segment_status(
                     segment.id,
                     "failed",
-                    error=str(exc),
+                    error=error,
                 )
                 continue
 
@@ -65,8 +79,10 @@ class ExtractionWorker:
                 created += created_for_segment
                 self.event_store.mark_session_segment_status(segment.id, "processed")
             else:
-                skipped += 1
                 reason = result.no_memory_reason or "No durable memory candidate found."
+                skipped_outcomes.append(
+                    SegmentOutcome(segment.id, segment.session_id, reason)
+                )
                 self.event_store.mark_session_segment_status(
                     segment.id,
                     "skipped",
@@ -75,12 +91,14 @@ class ExtractionWorker:
 
         return ExtractionWorkerResult(
             processed_segments=processed,
-            skipped_segments=skipped,
-            failed_segments=failed,
+            skipped_segments=len(skipped_outcomes),
+            failed_segments=len(failed_outcomes),
             created_candidates=created,
             remaining_idle_segments=len(
                 self.event_store.list_session_segments(status="idle")
             ),
+            skipped=skipped_outcomes,
+            failed=failed_outcomes,
         )
 
     def _create_candidates(

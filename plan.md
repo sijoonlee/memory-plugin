@@ -1192,6 +1192,68 @@ agent- or transport-specific assumptions into core retrieval, scoring, or review
   table (verified via search), unknown id is a safe no-op, deleting one memory
   leaves others intact, and the service wrapper reports the outcome
 
+### Milestone 16: Segment Observability And Session Log Viewing
+
+Make the extraction pipeline transparent: surface *why* each session segment was
+skipped, failed, or picked, and let a reviewer read the underlying session event
+log. The data already exists — `session_segments.error` holds the LLM's
+`no_memory_reason` (skipped) or the extraction error (failed),
+`list_events_for_session_segment` returns a segment's events, and a candidate's
+`evidence_event_ids` / `source_session_segment_id` explain why it was picked —
+but today it is buried in the database. (Builds on the `process`-output skip/fail
+reasons already added to `ExtractionWorkerResult`.)
+
+- CLI surface: a `memory-mcp segments` command to list segments by status
+  (`idle` / `processed` / `skipped` / `failed`) with their reason/error, and a
+  way to print one segment's event log
+- review API: expose skipped/failed segments and their reasons (not just
+  candidate-attached segments), plus a segment event-log endpoint
+- review UI:
+  - a segments view showing skipped/failed/processed segments with the reason
+  - per-segment session log (raw events), kept opt-in because hook logs can be
+    noisy or sensitive
+  - for a picked candidate, show its evidence events and source segment so
+    "why this became a memory" is visible
+- decide delivery target: the local review UI now versus the Milestone 14
+  frontend (the local UI is slated to be replaced); resolve when M14 is scoped
+- tests: segment listing/reasons via the service and API; CLI lists skipped
+  reasons; event-log retrieval returns the expected events
+
+### Milestone 17: Project-Scoped Memory And Retrieval
+
+Give memories a project/repo scope so semantic search can filter to the relevant
+repository. This closes the "Should memories be scoped per project?" open question
+and matches the "Scope memories by project" V1 default.
+
+Current gap: `project` exists on `events` and `session_segments` (indexed) but is
+dropped at the candidate stage, so `MemoryRecord` has no project at all. The MCP
+`memory_search` tool already receives the caller's `project` in `event_context`
+(`service.py`) but only uses it to log the retrieval event — it is not used to
+filter. So the scope already reaches the search call and is discarded.
+
+- model: add `project: str | None = None` to `MemoryCreate` / `MemoryRecord`, plus
+  a denormalized `memories.project` column + index for efficient filtering and
+  `list_memories(project=...)`
+- propagation:
+  - approval path derives project from the candidate's source segment (the review
+    service already joins candidate -> segment -> project for its candidate filter)
+  - manual `memory_create` accepts a `project` param / takes it from context
+  - existing memories stay `project = None` (global); optional later backfill from
+    the source segment
+- retrieval: add a `project` filter to `search_memories` (Python-side, alongside
+  the existing tag/min_score filtering), and wire the MCP tool to pass its context
+  project so retrieval is repo-scoped by default
+- decision A (scoping semantics): strict (only the repo's memories) vs inclusive
+  (repo's + global project-less memories). Lean inclusive so cross-cutting lessons
+  and pre-existing memories still surface; provide an explicit way to widen to all
+- decision B (repo identity): `project` is currently the captured cwd path, which
+  is not a stable repo identity (worktrees, clones, subdirectories differ). For
+  true git-repo scoping, normalize at capture in the adapters to the git toplevel
+  (`git rev-parse --show-toplevel`) or the remote/repo name. Decide whether to do
+  this alongside or keep raw cwd for now
+- tests: repo-scoped search returns the repo's + global memories and excludes other
+  repos; approval carries project through to the memory; manual create sets project
+
 ## Non-Goals For V1
 
 - Full agent runtime

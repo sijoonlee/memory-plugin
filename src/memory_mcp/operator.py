@@ -108,6 +108,8 @@ class OperatorWorkflow:
                 "remaining_idle_segments": len(
                     self.event_store.list_session_segments(status="idle")
                 ),
+                "skipped": [],
+                "failed": [],
             }
         else:
             extraction_result = ExtractionWorker(
