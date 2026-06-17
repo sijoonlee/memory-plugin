@@ -4,11 +4,11 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from memory_mcp.core.events import EventRecord, SessionSegmentRecord
+from memory_mcp.core.events import EventRecord, MemoryCandidateRecord, SessionSegmentRecord
 
 MemoryCandidateCategory = Literal[
     "clue_location",
@@ -44,6 +44,36 @@ class ExtractionResult(BaseModel):
         return self
 
 
+class MergeProposalResult(BaseModel):
+    """An LLM proposal for whether and how to merge related candidates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    should_merge: bool
+    reason: str = Field(min_length=1)
+    situation: str = ""
+    lesson: str = ""
+    action: str = ""
+    category: MemoryCandidateCategory | None = None
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    evidence_summary: str = ""
+
+    @model_validator(mode="after")
+    def require_content_when_merging(self) -> MergeProposalResult:
+        if self.should_merge:
+            missing = [
+                name
+                for name in ("situation", "lesson", "action", "evidence_summary")
+                if not getattr(self, name).strip()
+            ]
+            if missing or self.category is None:
+                raise ValueError(
+                    "merged content is required when should_merge is true: "
+                    + ", ".join(missing + ([] if self.category else ["category"]))
+                )
+        return self
+
+
 class MemoryExtractor(Protocol):
     def extract(
         self,
@@ -51,6 +81,15 @@ class MemoryExtractor(Protocol):
         segment: SessionSegmentRecord,
         events: list[EventRecord],
     ) -> ExtractionResult:
+        ...
+
+
+class MergeProposer(Protocol):
+    def propose(
+        self,
+        *,
+        candidates: list[MemoryCandidateRecord],
+    ) -> MergeProposalResult:
         ...
 
 
@@ -64,6 +103,18 @@ class StaticMemoryExtractor:
         segment: SessionSegmentRecord,
         events: list[EventRecord],
     ) -> ExtractionResult:
+        return self.result
+
+
+class StaticMergeProposer:
+    def __init__(self, result: MergeProposalResult) -> None:
+        self.result = result
+
+    def propose(
+        self,
+        *,
+        candidates: list[MemoryCandidateRecord],
+    ) -> MergeProposalResult:
         return self.result
 
 
@@ -90,59 +141,16 @@ class CodexCliExtractor:
         events: list[EventRecord],
     ) -> ExtractionResult:
         prompt = build_extraction_prompt(segment=segment, events=events)
-        with tempfile.TemporaryDirectory(prefix="memory-mcp-extract-") as temp_dir:
-            temp_path = Path(temp_dir)
-            schema_path = temp_path / "memory_candidate.schema.json"
-            output_path = temp_path / "codex-output.json"
-            schema_path.write_text(
-                json.dumps(ExtractionResult.model_json_schema(), indent=2),
-                encoding="utf-8",
-            )
-            cmd = [
-                self.codex_bin,
-                "exec",
-                "--ephemeral",
-                "--sandbox",
-                "read-only",
-                "--skip-git-repo-check",
-                "--output-schema",
-                str(schema_path),
-                "--output-last-message",
-                str(output_path),
-            ]
-            if self.model is not None:
-                cmd.extend(["--model", self.model])
-            if self.effort is not None:
-                cmd.extend(["--config", f'model_reasoning_effort="{self.effort}"'])
-            if self.use_project_context and segment.project and Path(segment.project).exists():
-                cmd.extend(["--cd", segment.project])
-            cmd.append("-")
-
-            try:
-                completed = subprocess.run(
-                    cmd,
-                    input=prompt,
-                    text=True,
-                    capture_output=True,
-                    timeout=self.timeout_seconds,
-                    check=False,
-                    cwd=temp_path,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError(
-                    f"codex exec timed out after {self.timeout_seconds}s"
-                ) from exc
-
-            if completed.returncode != 0:
-                raise RuntimeError(
-                    "codex exec failed "
-                    f"(exit={completed.returncode}): {completed.stderr.strip()}"
-                )
-            if not output_path.exists():
-                raise RuntimeError("codex exec did not write output-last-message file")
-
-            raw_output = output_path.read_text(encoding="utf-8").strip()
-            return _parse_extraction_output(raw_output, provider="codex exec")
+        raw_output = _run_codex_exec(
+            prompt,
+            ExtractionResult.model_json_schema(),
+            codex_bin=self.codex_bin,
+            model=self.model,
+            effort=self.effort,
+            timeout_seconds=self.timeout_seconds,
+            project_dir=_project_dir(self.use_project_context, segment.project),
+        )
+        return _parse_structured(raw_output, ExtractionResult, provider="codex exec")
 
 
 class ClaudeCliExtractor:
@@ -168,53 +176,80 @@ class ClaudeCliExtractor:
         events: list[EventRecord],
     ) -> ExtractionResult:
         prompt = build_extraction_prompt(segment=segment, events=events)
-        schema_json = json.dumps(ExtractionResult.model_json_schema())
-        with tempfile.TemporaryDirectory(prefix="memory-mcp-extract-") as temp_dir:
-            temp_path = Path(temp_dir)
-            cmd = [
-                self.claude_bin,
-                # NOTE: do NOT use --bare here. It bundles "skip keychain reads"
-                # along with its other minimal-mode behaviors, which breaks auth
-                # on machines whose OAuth token lives only in the macOS Keychain
-                # (no ~/.claude/.credentials.json). Isolation is already provided
-                # by --no-session-persistence plus the tempdir cwd below.
-                "--print",
-                "--output-format",
-                "json",
-                "--json-schema",
-                schema_json,
-                "--no-session-persistence",
-            ]
-            if self.model is not None:
-                cmd.extend(["--model", self.model])
-            if self.effort is not None:
-                cmd.extend(["--effort", self.effort])
-            if self.use_project_context and segment.project and Path(segment.project).exists():
-                cmd.extend(["--add-dir", segment.project])
-            cmd.append(prompt)
+        raw_output = _run_claude_print(
+            prompt,
+            ExtractionResult.model_json_schema(),
+            claude_bin=self.claude_bin,
+            model=self.model,
+            effort=self.effort,
+            timeout_seconds=self.timeout_seconds,
+            project_dir=_project_dir(self.use_project_context, segment.project),
+        )
+        return _parse_structured(raw_output, ExtractionResult, provider="claude")
 
-            try:
-                completed = subprocess.run(
-                    cmd,
-                    text=True,
-                    capture_output=True,
-                    timeout=self.timeout_seconds,
-                    check=False,
-                    cwd=temp_path,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError(
-                    f"claude --print timed out after {self.timeout_seconds}s"
-                ) from exc
 
-            if completed.returncode != 0:
-                raise RuntimeError(
-                    "claude --print failed "
-                    f"(exit={completed.returncode}): "
-                    f"{completed.stderr.strip() or completed.stdout.strip()}"
-                )
+class CodexCliMergeProposer:
+    def __init__(
+        self,
+        *,
+        codex_bin: str = "codex",
+        model: str | None = None,
+        effort: str | None = None,
+        timeout_seconds: int = 180,
+    ) -> None:
+        self.codex_bin = codex_bin
+        self.model = model
+        self.effort = effort
+        self.timeout_seconds = timeout_seconds
 
-            return _parse_extraction_output(completed.stdout.strip(), provider="claude")
+    def propose(
+        self,
+        *,
+        candidates: list[MemoryCandidateRecord],
+    ) -> MergeProposalResult:
+        prompt = build_merge_prompt(candidates=candidates)
+        raw_output = _run_codex_exec(
+            prompt,
+            MergeProposalResult.model_json_schema(),
+            codex_bin=self.codex_bin,
+            model=self.model,
+            effort=self.effort,
+            timeout_seconds=self.timeout_seconds,
+            project_dir=None,
+        )
+        return _parse_structured(raw_output, MergeProposalResult, provider="codex exec")
+
+
+class ClaudeCliMergeProposer:
+    def __init__(
+        self,
+        *,
+        claude_bin: str = "claude",
+        model: str | None = None,
+        effort: str | None = None,
+        timeout_seconds: int = 180,
+    ) -> None:
+        self.claude_bin = claude_bin
+        self.model = model
+        self.effort = effort
+        self.timeout_seconds = timeout_seconds
+
+    def propose(
+        self,
+        *,
+        candidates: list[MemoryCandidateRecord],
+    ) -> MergeProposalResult:
+        prompt = build_merge_prompt(candidates=candidates)
+        raw_output = _run_claude_print(
+            prompt,
+            MergeProposalResult.model_json_schema(),
+            claude_bin=self.claude_bin,
+            model=self.model,
+            effort=self.effort,
+            timeout_seconds=self.timeout_seconds,
+            project_dir=None,
+        )
+        return _parse_structured(raw_output, MergeProposalResult, provider="claude")
 
 
 def build_extraction_prompt(
@@ -245,15 +280,176 @@ def build_extraction_prompt(
     )
 
 
-def _parse_extraction_output(raw_output: str, *, provider: str) -> ExtractionResult:
+def build_merge_prompt(*, candidates: list[MemoryCandidateRecord]) -> str:
+    payload = [
+        {
+            "id": candidate.id,
+            "situation": candidate.situation,
+            "lesson": candidate.lesson,
+            "action": candidate.action,
+            "category": candidate.category,
+            "confidence": candidate.confidence,
+            "evidence_summary": candidate.evidence_summary,
+        }
+        for candidate in candidates
+    ]
+    return (
+        "You are reviewing memory candidates that a clustering step thinks may "
+        "describe the same durable lesson.\n"
+        "Return only JSON that matches the provided output schema.\n\n"
+        "Decide whether these candidates should be merged into one stronger "
+        "memory. Merge only when they truly capture the same reusable lesson; "
+        "prefer the clearest situation, the most actionable action, and a lesson "
+        "that covers all of them.\n"
+        "If they are genuinely distinct, set should_merge to false and explain "
+        "why in reason; leave the content fields empty.\n"
+        "When merging, pick the single best category and a confidence reflecting "
+        "the combined evidence.\n\n"
+        "<candidates_json>\n"
+        f"{json.dumps(payload, indent=2)}\n"
+        "</candidates_json>\n"
+    )
+
+
+_T = TypeVar("_T", bound=BaseModel)
+
+
+def _project_dir(use_project_context: bool, project: str | None) -> str | None:
+    if use_project_context and project and Path(project).exists():
+        return project
+    return None
+
+
+def _run_cli_subprocess(
+    cmd: list[str],
+    *,
+    input_text: str | None,
+    timeout_seconds: int,
+    cwd: Path,
+    provider: str,
+) -> subprocess.CompletedProcess[str]:
     try:
-        return ExtractionResult.model_validate_json(raw_output)
+        completed = subprocess.run(
+            cmd,
+            input=input_text,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+            check=False,
+            cwd=cwd,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{provider} timed out after {timeout_seconds}s") from exc
+
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"{provider} failed (exit={completed.returncode}): "
+            f"{completed.stderr.strip() or completed.stdout.strip()}"
+        )
+    return completed
+
+
+def _run_codex_exec(
+    prompt: str,
+    schema: dict,
+    *,
+    codex_bin: str,
+    model: str | None,
+    effort: str | None,
+    timeout_seconds: int,
+    project_dir: str | None,
+) -> str:
+    with tempfile.TemporaryDirectory(prefix="memory-mcp-cli-") as temp_dir:
+        temp_path = Path(temp_dir)
+        schema_path = temp_path / "schema.json"
+        output_path = temp_path / "codex-output.json"
+        schema_path.write_text(json.dumps(schema, indent=2), encoding="utf-8")
+        cmd = [
+            codex_bin,
+            "exec",
+            "--ephemeral",
+            "--sandbox",
+            "read-only",
+            "--skip-git-repo-check",
+            "--output-schema",
+            str(schema_path),
+            "--output-last-message",
+            str(output_path),
+        ]
+        if model is not None:
+            cmd.extend(["--model", model])
+        if effort is not None:
+            cmd.extend(["--config", f'model_reasoning_effort="{effort}"'])
+        if project_dir is not None:
+            cmd.extend(["--cd", project_dir])
+        cmd.append("-")
+
+        _run_cli_subprocess(
+            cmd,
+            input_text=prompt,
+            timeout_seconds=timeout_seconds,
+            cwd=temp_path,
+            provider="codex exec",
+        )
+        if not output_path.exists():
+            raise RuntimeError("codex exec did not write output-last-message file")
+        return output_path.read_text(encoding="utf-8").strip()
+
+
+def _run_claude_print(
+    prompt: str,
+    schema: dict,
+    *,
+    claude_bin: str,
+    model: str | None,
+    effort: str | None,
+    timeout_seconds: int,
+    project_dir: str | None,
+) -> str:
+    schema_json = json.dumps(schema)
+    with tempfile.TemporaryDirectory(prefix="memory-mcp-cli-") as temp_dir:
+        temp_path = Path(temp_dir)
+        cmd = [
+            claude_bin,
+            # NOTE: do NOT use --bare here. It bundles "skip keychain reads"
+            # along with its other minimal-mode behaviors, which breaks auth
+            # on machines whose OAuth token lives only in the macOS Keychain
+            # (no ~/.claude/.credentials.json). Isolation is already provided
+            # by --no-session-persistence plus the tempdir cwd below.
+            "--print",
+            "--output-format",
+            "json",
+            "--json-schema",
+            schema_json,
+            "--no-session-persistence",
+        ]
+        if model is not None:
+            cmd.extend(["--model", model])
+        if effort is not None:
+            cmd.extend(["--effort", effort])
+        if project_dir is not None:
+            cmd.extend(["--add-dir", project_dir])
+        cmd.append(prompt)
+
+        completed = _run_cli_subprocess(
+            cmd,
+            input_text=None,
+            timeout_seconds=timeout_seconds,
+            cwd=temp_path,
+            provider="claude",
+        )
+        return completed.stdout.strip()
+
+
+def _parse_structured(raw_output: str, model: type[_T], *, provider: str) -> _T:
+    try:
+        return model.model_validate_json(raw_output)
     except ValidationError as direct_error:
         try:
             envelope = json.loads(raw_output)
         except json.JSONDecodeError as exc:
             raise RuntimeError(
-                f"{provider} returned invalid extraction JSON: {direct_error}"
+                f"{provider} returned invalid JSON: {direct_error}"
             ) from exc
 
         if isinstance(envelope, dict):
@@ -263,15 +459,13 @@ def _parse_extraction_output(raw_output: str, *, provider: str) -> ExtractionRes
                 value = envelope.get(key)
                 if isinstance(value, str):
                     try:
-                        return ExtractionResult.model_validate_json(value.strip())
+                        return model.model_validate_json(value.strip())
                     except ValidationError:
                         continue
                 if isinstance(value, dict):
                     try:
-                        return ExtractionResult.model_validate(value)
+                        return model.model_validate(value)
                     except ValidationError:
                         continue
 
-        raise RuntimeError(
-            f"{provider} returned invalid extraction JSON: {direct_error}"
-        )
+        raise RuntimeError(f"{provider} returned invalid JSON: {direct_error}")

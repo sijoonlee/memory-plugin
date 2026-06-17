@@ -10,6 +10,7 @@ from memory_mcp.core.embeddings import LangChainHuggingFaceEmbedder
 from memory_mcp.core.events import (
     EventRecord,
     EventStore,
+    MemoryCandidateCreate,
     MemoryCandidateRecord,
     SessionSegmentRecord,
 )
@@ -141,6 +142,22 @@ class CandidateReviewService:
 
     def reject_candidate(self, candidate_id: str, *, reason: str) -> MemoryCandidateRecord:
         return self.candidate_worker.reject_candidate(candidate_id, reason=reason)
+
+    def merge_candidates(
+        self,
+        source_ids: list[str],
+        merged: MemoryCandidateCreate,
+    ) -> MemoryCandidateRecord:
+        """Merge pending candidates into one new editable pending candidate.
+
+        Human-driven: the new candidate still requires approval, which runs the
+        normal memory creation path (including dedupe).
+        """
+
+        return self.candidate_worker.merge_candidates(source_ids, merged)
+
+    def archive_candidate(self, candidate_id: str) -> MemoryCandidateRecord:
+        return self.candidate_worker.archive_candidate(candidate_id)
 
     def retry_segment(self, segment_id: str) -> SessionSegmentRecord:
         segment = self.event_store.get_session_segment(segment_id)

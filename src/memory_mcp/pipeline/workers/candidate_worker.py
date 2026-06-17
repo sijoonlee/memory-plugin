@@ -160,6 +160,81 @@ class CandidateWorker:
         self.event_store.update_memory_candidate(updated)
         return updated
 
+    def merge_candidates(
+        self,
+        source_ids: list[str],
+        merged: MemoryCandidateCreate,
+    ) -> MemoryCandidateRecord:
+        """Combine several pending candidates into one new pending candidate.
+
+        The merged candidate is human- or agent-authored content; provenance is
+        derived from the sources (the union of evidence event ids, the set of
+        source segment ids, and the source candidate ids land in metadata). Each
+        source is marked ``merged`` with ``merged_into_candidate_id``. The new
+        candidate is itself ``pending_review`` and stays editable before approval.
+        """
+
+        unique_ids = list(dict.fromkeys(source_ids))
+        if len(unique_ids) < 2:
+            raise ValueError("merge requires at least two distinct source candidates")
+        sources = [self._require_candidate(candidate_id) for candidate_id in unique_ids]
+        for source in sources:
+            if source.status != "pending_review":
+                raise ValueError(
+                    f"candidate is not pending_review: {source.id} ({source.status})"
+                )
+
+        evidence_event_ids = sorted(
+            {eid for source in sources for eid in source.evidence_event_ids}
+        )
+        source_segment_ids = sorted(
+            {
+                source.source_session_segment_id
+                for source in sources
+                if source.source_session_segment_id is not None
+            }
+        )
+        metadata = dict(merged.metadata)
+        metadata["merged_from"] = {
+            "source_candidate_ids": unique_ids,
+            "source_session_segment_ids": source_segment_ids,
+        }
+
+        new_candidate = self.event_store.create_memory_candidate(
+            merged.model_copy(
+                update={
+                    "evidence_event_ids": evidence_event_ids,
+                    "source_session_segment_id": None,
+                    "metadata": metadata,
+                }
+            )
+        )
+
+        now = utc_now()
+        for source in sources:
+            self.event_store.update_memory_candidate(
+                source.model_copy(
+                    update={
+                        "status": "merged",
+                        "updated_at": now,
+                        "merged_into_candidate_id": new_candidate.id,
+                    }
+                )
+            )
+        return new_candidate
+
+    def archive_candidate(self, candidate_id: str) -> MemoryCandidateRecord:
+        """Hide a candidate from the active queue while retaining it for audit."""
+
+        candidate = self._require_candidate(candidate_id)
+        if candidate.status == "archived":
+            raise ValueError("candidate is already archived")
+        updated = candidate.model_copy(
+            update={"status": "archived", "updated_at": utc_now()}
+        )
+        self.event_store.update_memory_candidate(updated)
+        return updated
+
     def _require_candidate(self, candidate_id: str) -> MemoryCandidateRecord:
         candidate = self.event_store.get_memory_candidate(candidate_id)
         if candidate is None:

@@ -1074,30 +1074,66 @@ sessions would never be marked idle, so extraction would never fire).
 - parity: incremental output equals the full backfill for a stream —
   `test_session_worker_cdc.py`
 
-### Milestone 13: Candidate Merge And Rich Dashboard Workflow
+### Milestone 13: Candidate Merge Workflow (done)
 
-- support merging related candidates across segments
-- merge flow preserves:
-  - evidence event ids
-  - source segment ids
-  - source candidate ids
-- merged candidates can be edited before approval
-- original candidates are marked `merged` with `merged_into_candidate_id`
-- keep merge human-gated:
-  - manual merge first
-  - later LLM-assisted merge proposals can create a new `pending_review` candidate
-  - LLM proposals should not directly create or modify active memories
-- support archive action for candidates that should be hidden but retained for audit
-- show dedupe match details and possible duplicate metadata more prominently
-- add batch review workflow for high candidate volume
-- add richer filters and sorting:
-  - project
-  - status
-  - category
-  - confidence
-  - created date
-  - source session/segment
-- keep raw full-segment display opt-in because hook logs can be noisy or sensitive
+Scope is the durable merge core: the data model, the human-gated manual merge,
+and the LLM-assisted merge agent. The rich dashboard UX (batch review UI, richer
+filters/sorting, prominent dedupe surfacing) is intentionally out of scope for
+M13.
+
+#### Milestone 13A: Merge Data Model And Manual Merge (done)
+
+- added `CandidateWorker.merge_candidates(source_ids, merged)` (placed in the
+  worker, not `EventStore`, to match the existing approve/reject/retry
+  state-machine layer the review service already calls) that creates one new
+  `pending_review` candidate and marks each source `merged` with
+  `merged_into_candidate_id`
+- the merged candidate preserves:
+  - the union of `evidence_event_ids`
+  - the set of source `source_session_segment_id`s (in `metadata.merged_from`)
+  - the source candidate ids (in `metadata.merged_from`)
+- merged candidates stay editable before approval (a normal `pending_review` row)
+- added an `archived` candidate status (extends the `CandidateStatus` literal and
+  `operator.CANDIDATE_STATUSES`); `CandidateWorker.archive_candidate` hides a
+  candidate from the queue while retaining it for audit
+- tests (`tests/test_candidate_merge.py`): provenance preserved, sources become
+  `merged`, merged candidate is editable, merge needs two distinct pending
+  sources, archive hides without deleting
+
+#### Milestone 13B: Review Service Merge And Archive Actions (done)
+
+- exposed merge and archive through `CandidateReviewService`
+  (`merge_candidates`, `archive_candidate`) and the HTTP API
+  (`POST /api/candidates/merge`, `POST /api/candidates/{id}/archive`)
+- all actions stay human-driven; approving a merged candidate runs the normal
+  memory creation path (including dedupe), unchanged
+- fixed a latent bug in `review/server.py` `_handle_errors`: it called `_json`
+  with a positional status code, so every error response (400/422) would have
+  raised `TypeError`; now passes `status_code=` (covered by the merge validation
+  test)
+- tests (`tests/test_review_merge.py`): merge endpoint creates a `pending_review`
+  candidate and drops the sources from the queue, merge validation errors return
+  400, archive endpoint hides the candidate and lists it under `archived`
+
+#### Milestone 13C: LLM-Assisted Merge Proposals (done)
+
+- reused the extractor abstraction in `pipeline/extractors.py`: added
+  `MergeProposalResult` schema, the `MergeProposer` protocol, `StaticMergeProposer`,
+  and `CodexCliMergeProposer` / `ClaudeCliMergeProposer` running the same
+  non-interactive CLI + JSON schema pattern; factored shared subprocess plumbing
+  (`_run_cli_subprocess`, `_run_codex_exec`, `_run_claude_print`,
+  `_parse_structured`) so extraction and merge proposal share one runner
+- `MergeProposalWorker` deterministically pre-clusters pending candidates
+  (single-linkage by category match + lexical Jaccard overlap), asks the proposer
+  per cluster, and on `should_merge` calls the 13A `merge_candidates` primitive to
+  produce a new `pending_review` candidate
+- safety model resolved: the agent never creates active memories (a human still
+  approves the merged candidate, which runs the normal dedupe path); sources are
+  marked `merged` (reversible via `retry_candidate`), not approved
+- tests (`tests/test_merge_proposal.py`): the agent creates no active memory and
+  emits a `pending_review` proposal, declines when the proposer says no (sources
+  untouched), dissimilar candidates do not cluster, and clustering respects
+  category boundaries
 
 ### Milestone 14: Shared Online Memory Server (BE + FE)
 

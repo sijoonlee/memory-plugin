@@ -14,7 +14,7 @@ from memory_mcp.pipeline.workers.session_worker import SessionWorker
 
 MEMORY_STATUSES = ["active", "stale", "superseded", "invalid", "rejected", "archived"]
 SESSION_STATUSES = ["open", "idle", "processed", "skipped", "failed"]
-CANDIDATE_STATUSES = ["pending_review", "approved", "rejected", "merged"]
+CANDIDATE_STATUSES = ["pending_review", "approved", "rejected", "merged", "archived"]
 
 
 @dataclass(frozen=True)

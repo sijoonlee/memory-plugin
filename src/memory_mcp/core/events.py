@@ -37,7 +37,9 @@ class EventRecord(EventCreate):
 
 
 SessionStatus = Literal["open", "idle", "processed", "skipped", "failed"]
-CandidateStatus = Literal["pending_review", "approved", "rejected", "merged"]
+CandidateStatus = Literal[
+    "pending_review", "approved", "rejected", "merged", "archived"
+]
 
 
 class SessionSegmentRecord(BaseModel):

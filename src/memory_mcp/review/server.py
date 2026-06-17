@@ -12,6 +12,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from memory_mcp.core.events import MemoryCandidateCreate
 from memory_mcp.review.service import (
     CandidateFilters,
     CandidateReviewService,
@@ -98,6 +99,18 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
         candidate = service.reject_candidate(candidate_id, reason=reason)
         return _json({"candidate": candidate.model_dump(mode="json")})
 
+    async def merge_candidates(request: Request) -> Response:
+        body = await _json_body(request)
+        source_ids = body.get("source_ids") or []
+        merged = MemoryCandidateCreate.model_validate(body.get("merged", {}))
+        candidate = service.merge_candidates(source_ids, merged)
+        return _json({"candidate": candidate.model_dump(mode="json")})
+
+    async def archive_candidate(request: Request) -> Response:
+        candidate_id = request.path_params["candidate_id"]
+        candidate = service.archive_candidate(candidate_id)
+        return _json({"candidate": candidate.model_dump(mode="json")})
+
     async def retry_segment(request: Request) -> Response:
         segment_id = request.path_params["segment_id"]
         segment = service.retry_segment(segment_id)
@@ -109,6 +122,11 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
             Route("/", index, methods=["GET"]),
             Route("/api/health", health, methods=["GET"]),
             Route("/api/candidates", _handle_errors(list_candidates), methods=["GET"]),
+            Route(
+                "/api/candidates/merge",
+                _handle_errors(merge_candidates),
+                methods=["POST"],
+            ),
             Route("/api/memories", _handle_errors(list_memories), methods=["GET"]),
             Route(
                 "/api/memories/{memory_id}",
@@ -136,6 +154,11 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
                 methods=["POST"],
             ),
             Route(
+                "/api/candidates/{candidate_id}/archive",
+                _handle_errors(archive_candidate),
+                methods=["POST"],
+            ),
+            Route(
                 "/api/segments/{segment_id}/retry",
                 _handle_errors(retry_segment),
                 methods=["POST"],
@@ -155,9 +178,12 @@ def _handle_errors(handler: Any) -> Any:
         try:
             return await handler(request)
         except ValidationError as exc:
-            return _json({"error": "validation failed", "details": exc.errors()}, 422)
+            return _json(
+                {"error": "validation failed", "details": exc.errors()},
+                status_code=422,
+            )
         except ValueError as exc:
-            return _json({"error": str(exc)}, 400)
+            return _json({"error": str(exc)}, status_code=400)
 
     return wrapped
 
