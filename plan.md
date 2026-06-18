@@ -1192,7 +1192,7 @@ agent- or transport-specific assumptions into core retrieval, scoring, or review
   table (verified via search), unknown id is a safe no-op, deleting one memory
   leaves others intact, and the service wrapper reports the outcome
 
-### Milestone 16: Segment Observability And Session Log Viewing
+### Milestone 16: Segment Observability And Session Log Viewing (done)
 
 Make the extraction pipeline transparent: surface *why* each session segment was
 skipped, failed, or picked, and let a reviewer read the underlying session event
@@ -1201,23 +1201,33 @@ log. The data already exists — `session_segments.error` holds the LLM's
 `list_events_for_session_segment` returns a segment's events, and a candidate's
 `evidence_event_ids` / `source_session_segment_id` explain why it was picked —
 but today it is buried in the database. (Builds on the `process`-output skip/fail
-reasons already added to `ExtractionWorkerResult`.)
+reasons already added to `ExtractionWorkerResult`.) Built incrementally as three
+tested slices: CLI, then review API, then review UI.
 
-- CLI surface: a `memory-mcp segments` command to list segments by status
-  (`idle` / `processed` / `skipped` / `failed`) with their reason/error, and a
-  way to print one segment's event log
-- review API: expose skipped/failed segments and their reasons (not just
-  candidate-attached segments), plus a segment event-log endpoint
-- review UI:
-  - a segments view showing skipped/failed/processed segments with the reason
-  - per-segment session log (raw events), kept opt-in because hook logs can be
-    noisy or sensitive
-  - for a picked candidate, show its evidence events and source segment so
-    "why this became a memory" is visible
-- decide delivery target: the local review UI now versus the Milestone 14
-  frontend (the local UI is slated to be replaced); resolve when M14 is scoped
-- tests: segment listing/reasons via the service and API; CLI lists skipped
-  reasons; event-log retrieval returns the expected events
+- [x] CLI surface (`cli.py`): `memory-mcp segments [--status] [--limit]` lists
+  segments with their status and `error` reason; `memory-mcp segment-events
+  <segment_id>` prints one segment's (already-redacted) raw event log. Both reuse
+  `EventStore.list_session_segments` / `get_session_segment` /
+  `list_events_for_session_segment`; no new storage code.
+- [x] review API: `CandidateReviewService.list_segments(status, limit)` and
+  `get_segment_detail(segment_id)` (new `SegmentDetail` model = segment + events),
+  exposed as `GET /api/segments` and `GET /api/segments/{id}/events` in
+  `review/server.py`. Surfaces every segment (incl. skipped/failed), not just
+  candidate-attached ones; event payloads load only on the events call.
+- [x] review UI (`review/static/`): segments surfaced via a "Segments" optgroup in
+  the existing status dropdown (skipped/failed/processed/all), reusing the
+  "Active Memories" routing pattern; segment detail shows the reason prominently
+  with an opt-in "Show Event Log" toggle and the existing Retry Extraction button.
+  Status dropdown now auto-loads on change; `app.js?v=m16` cache-bust. The
+  "why a candidate became a memory" view (evidence events + source segment) was
+  already covered by the existing candidate detail.
+- [x] decision (delivery target): **local review UI now**. M14's frontend is not
+  yet scoped, so the local UI is the only surface available; the segments view
+  reuses existing scaffolding and is cheap to drop if M14 later replaces it.
+- [x] tests: `tests/test_cli.py` (status filter, all-status, event log, missing
+  segment), `tests/test_review_service.py` (listing/reasons/limit, event log,
+  missing segment), `tests/test_review_server.py` (list + event-log endpoints,
+  missing-segment 400). Full suite green (127 passed).
 
 ### Milestone 17: Project-Scoped Memory And Retrieval (done)
 

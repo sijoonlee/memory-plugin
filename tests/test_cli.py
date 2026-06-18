@@ -1,6 +1,10 @@
+import json
+from datetime import datetime, timezone
+
 from typer.testing import CliRunner
 
 from memory_mcp import cli
+from memory_mcp.core.events import EventCreate, EventStore, SessionSegmentRecord
 
 
 class FakeStore:
@@ -112,3 +116,103 @@ def test_process_can_use_claude_extractor_options(monkeypatch, tmp_path) -> None
     }
     assert captured["process_kwargs"]["extractor"] is not None
     assert captured["process_kwargs"]["extraction_limit"] == 2
+
+
+def _seed_segments(root) -> EventStore:
+    store = EventStore(root)
+    store.upsert_session_segment(
+        SessionSegmentRecord(
+            id="seg_skipped",
+            project="/repo",
+            session_id="s1",
+            segment_index=0,
+            first_event_at=datetime(2026, 6, 14, 0, 0, tzinfo=timezone.utc),
+            last_event_at=datetime(2026, 6, 14, 1, 0, tzinfo=timezone.utc),
+            event_count=1,
+            status="skipped",
+            error="No durable memory candidate found.",
+        )
+    )
+    store.upsert_session_segment(
+        SessionSegmentRecord(
+            id="seg_failed",
+            project="/repo",
+            session_id="s2",
+            segment_index=0,
+            first_event_at=datetime(2026, 6, 15, 0, 0, tzinfo=timezone.utc),
+            last_event_at=datetime(2026, 6, 15, 1, 0, tzinfo=timezone.utc),
+            event_count=1,
+            status="failed",
+            error="extractor crashed",
+        )
+    )
+    store.append_event(
+        EventCreate(
+            event_type="tool_result",
+            source="test",
+            project="/repo",
+            session_id="s1",
+            payload={"message": "ran pytest"},
+        ),
+        created_at=datetime(2026, 6, 14, 0, 30, tzinfo=timezone.utc),
+    )
+    return store
+
+
+def test_segments_lists_status_and_reason(tmp_path) -> None:
+    _seed_segments(tmp_path)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["segments", "--status", "skipped", "--root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "skipped"
+    assert payload["total"] == 1
+    assert payload["returned"] == 1
+    segment = payload["segments"][0]
+    assert segment["id"] == "seg_skipped"
+    assert segment["status"] == "skipped"
+    assert segment["error"] == "No durable memory candidate found."
+
+
+def test_segments_without_status_returns_all(tmp_path) -> None:
+    _seed_segments(tmp_path)
+
+    result = CliRunner().invoke(cli.app, ["segments", "--root", str(tmp_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["status"] is None
+    assert payload["total"] == 2
+    ids = {segment["id"] for segment in payload["segments"]}
+    assert ids == {"seg_skipped", "seg_failed"}
+
+
+def test_segment_events_prints_event_log(tmp_path) -> None:
+    _seed_segments(tmp_path)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["segment-events", "seg_skipped", "--root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["segment"]["id"] == "seg_skipped"
+    assert len(payload["events"]) == 1
+    assert payload["events"][0]["payload"]["message"] == "ran pytest"
+
+
+def test_segment_events_missing_segment_exits_nonzero(tmp_path) -> None:
+    EventStore(tmp_path)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["segment-events", "seg_nope", "--root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "session segment not found" in result.output

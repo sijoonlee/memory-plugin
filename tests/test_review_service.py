@@ -8,6 +8,7 @@ from memory_mcp.core.events import (
     MemoryCandidateCreate,
     SessionSegmentRecord,
 )
+import pytest
 from memory_mcp.core.models import MemoryCreate
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
@@ -166,6 +167,86 @@ def test_review_service_edits_before_approval(tmp_path) -> None:
     assert memory.what_happened == "Direct pytest used the wrong environment."
     assert memory.helpful_explanation == "Use uv run pytest."
     assert memory.confidence == 0.85
+
+
+def _seed_segment(
+    service: CandidateReviewService,
+    *,
+    segment_id: str,
+    status: str,
+    error: str | None,
+    session_id: str = "s1",
+) -> SessionSegmentRecord:
+    segment = SessionSegmentRecord(
+        id=segment_id,
+        project="/repo",
+        session_id=session_id,
+        segment_index=0,
+        first_event_at=datetime(2026, 6, 14, 0, 0, tzinfo=timezone.utc),
+        last_event_at=datetime(2026, 6, 14, 1, 0, tzinfo=timezone.utc),
+        event_count=1,
+        status=status,
+        error=error,
+    )
+    service.event_store.upsert_session_segment(segment)
+    return segment
+
+
+def test_review_service_lists_segments_with_reasons(tmp_path) -> None:
+    service = _service(tmp_path)
+    _seed_segment(
+        service,
+        segment_id="seg_skipped",
+        status="skipped",
+        error="No durable memory candidate found.",
+    )
+    _seed_segment(
+        service,
+        segment_id="seg_failed",
+        status="failed",
+        error="extractor crashed",
+        session_id="s2",
+    )
+
+    all_segments = service.list_segments()
+    assert {segment.id for segment in all_segments} == {"seg_skipped", "seg_failed"}
+
+    skipped = service.list_segments(status="skipped")
+    assert [segment.id for segment in skipped] == ["seg_skipped"]
+    assert skipped[0].error == "No durable memory candidate found."
+
+    assert service.list_segments(status="skipped", limit=0) == []
+
+
+def test_review_service_returns_segment_event_log(tmp_path) -> None:
+    service = _service(tmp_path)
+    segment = _seed_segment(
+        service,
+        segment_id="seg_skipped",
+        status="skipped",
+        error="No durable memory candidate found.",
+    )
+    service.event_store.append_event(
+        EventCreate(
+            event_type="tool_result",
+            source="test",
+            project="/repo",
+            session_id="s1",
+            payload={"message": "ran pytest"},
+        ),
+        created_at=datetime(2026, 6, 14, 0, 30, tzinfo=timezone.utc),
+    )
+
+    detail = service.get_segment_detail(segment.id)
+
+    assert detail.segment.id == segment.id
+    assert [event.payload["message"] for event in detail.events] == ["ran pytest"]
+
+
+def test_review_service_segment_detail_missing(tmp_path) -> None:
+    service = _service(tmp_path)
+    with pytest.raises(ValueError, match="session segment not found"):
+        service.get_segment_detail("seg_does_not_exist")
 
 
 def test_review_service_retries_failed_or_skipped_segment(tmp_path) -> None:

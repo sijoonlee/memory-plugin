@@ -111,6 +111,24 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
         candidate = service.archive_candidate(candidate_id)
         return _json({"candidate": candidate.model_dump(mode="json")})
 
+    async def list_segments(request: Request) -> Response:
+        status = _optional_query(request, "status")
+        limit_raw = _optional_query(request, "limit")
+        limit = int(limit_raw) if limit_raw is not None else 50
+        segments = service.list_segments(status=status, limit=limit)
+        return _json(
+            {
+                "status": status,
+                "total": len(segments),
+                "segments": [segment.model_dump(mode="json") for segment in segments],
+            }
+        )
+
+    async def get_segment_events(request: Request) -> Response:
+        segment_id = request.path_params["segment_id"]
+        detail = service.get_segment_detail(segment_id)
+        return _json(detail.model_dump(mode="json"))
+
     async def retry_segment(request: Request) -> Response:
         segment_id = request.path_params["segment_id"]
         segment = service.retry_segment(segment_id)
@@ -157,6 +175,12 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
                 "/api/candidates/{candidate_id}/archive",
                 _handle_errors(archive_candidate),
                 methods=["POST"],
+            ),
+            Route("/api/segments", _handle_errors(list_segments), methods=["GET"]),
+            Route(
+                "/api/segments/{segment_id}/events",
+                _handle_errors(get_segment_events),
+                methods=["GET"],
             ),
             Route(
                 "/api/segments/{segment_id}/retry",

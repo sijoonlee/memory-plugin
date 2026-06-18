@@ -1,5 +1,6 @@
 const state = {
   selectedId: null,
+  segments: {},
 };
 
 const statusEl = document.querySelector("#status");
@@ -12,9 +13,20 @@ filtersEl.addEventListener("submit", (event) => {
   loadCandidates();
 });
 
+filtersEl.addEventListener("change", (event) => {
+  if (event.target.name === "status") {
+    loadCandidates().catch((error) => setStatus(error.message));
+  }
+});
+
 async function loadCandidates() {
   const params = new URLSearchParams(new FormData(filtersEl));
-  if (params.get("status") === "active") {
+  const status = params.get("status");
+  if (status && status.startsWith("segment:")) {
+    const segmentStatus = status.slice("segment:".length);
+    return loadSegments(segmentStatus === "all" ? "" : segmentStatus);
+  }
+  if (status === "active") {
     return loadMemories();
   }
   setStatus("Loading candidates");
@@ -91,6 +103,101 @@ function renderMemoryDetail(memory) {
 
 function readonlyField(label, value) {
   return `<label>${label}<textarea readonly>${escapeHtml(value || "")}</textarea></label>`;
+}
+
+async function loadSegments(segmentStatus) {
+  setStatus("Loading segments");
+  const query = segmentStatus
+    ? `?status=${encodeURIComponent(segmentStatus)}`
+    : "";
+  const data = await request(`/api/segments${query}`);
+  state.segments = {};
+  listEl.innerHTML = "";
+  data.segments.forEach((segment) => {
+    state.segments[segment.id] = segment;
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `candidate-row ${segment.id === state.selectedId ? "active" : ""}`;
+    const events = `${segment.event_count} event${segment.event_count === 1 ? "" : "s"}`;
+    row.innerHTML = `
+      <div class="row-title">${escapeHtml(segment.id)}</div>
+      <div class="row-meta">${escapeHtml(segment.status)} · ${events} · ${escapeHtml(segment.project || "—")}</div>
+      <div class="row-meta">${escapeHtml((segment.error || "").slice(0, 90))}</div>
+    `;
+    row.addEventListener("click", () => selectSegment(segment.id));
+    listEl.append(row);
+  });
+  const count = data.segments.length;
+  setStatus(`${count} segment${count === 1 ? "" : "s"}`);
+}
+
+async function selectSegment(segmentId, includeEvents = false) {
+  state.selectedId = segmentId;
+  let segment = state.segments[segmentId];
+  let events = [];
+  if (includeEvents) {
+    const data = await request(`/api/segments/${segmentId}/events`);
+    segment = data.segment;
+    events = data.events;
+    state.segments[segmentId] = segment;
+  }
+  renderSegmentDetail(segment, events, includeEvents);
+  loadCandidates();
+}
+
+function renderSegmentDetail(segment, events, includeEvents) {
+  const reasonLabel =
+    segment.status === "failed"
+      ? "Failure error"
+      : segment.status === "skipped"
+        ? "Skip reason"
+        : "Note";
+  detailEl.innerHTML = `
+    <div class="detail-grid">
+      <div class="panel">
+        <h2>Session Segment</h2>
+        ${readonlyField(reasonLabel, segment.error || "—")}
+        <div class="meta">${escapeHtml(segment.id)}</div>
+        <div class="meta">status: ${escapeHtml(segment.status)}</div>
+        <div class="meta">project: ${escapeHtml(segment.project || "—")}</div>
+        <div class="meta">session: ${escapeHtml(segment.session_id)} · segment #${segment.segment_index}</div>
+        <div class="meta">events: ${segment.event_count}</div>
+        <div class="meta">first: ${escapeHtml(segment.first_event_at)}</div>
+        <div class="meta">last: ${escapeHtml(segment.last_event_at)}</div>
+        ${segment.processed_at ? `<div class="meta">processed: ${escapeHtml(segment.processed_at)}</div>` : ""}
+      </div>
+      <div class="panel">
+        <h2>Event Log</h2>
+        <div class="evidence">
+          <button type="button" class="secondary" id="toggleEvents">${includeEvents ? "Hide Event Log" : "Show Event Log"}</button>
+          ${
+            includeEvents
+              ? `<pre>${escapeHtml(JSON.stringify(events, null, 2))}</pre>`
+              : `<div class="meta">Event payloads are loaded on request.</div>`
+          }
+          ${retryButton(segment)}
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.querySelector("#toggleEvents").addEventListener("click", () => {
+    runAction(() => selectSegment(segment.id, !includeEvents));
+  });
+  const retry = document.querySelector("#retrySegment");
+  if (retry) {
+    retry.addEventListener("click", () => {
+      runAction(() => retrySegmentFromView(segment.id));
+    });
+  }
+}
+
+async function retrySegmentFromView(segmentId) {
+  await request(`/api/segments/${segmentId}/retry`, { method: "POST" });
+  setStatus("Segment queued for extraction");
+  state.selectedId = null;
+  detailEl.innerHTML = `<div class="empty">Segment queued for extraction.</div>`;
+  loadCandidates();
 }
 
 async function selectCandidate(candidateId, includeSegmentEvents = false) {

@@ -47,6 +47,11 @@ class CandidateDetail(BaseModel):
     segment_events: list[EventRecord] = Field(default_factory=list)
 
 
+class SegmentDetail(BaseModel):
+    segment: SessionSegmentRecord
+    events: list[EventRecord] = Field(default_factory=list)
+
+
 class CandidateReviewService:
     def __init__(
         self,
@@ -158,6 +163,36 @@ class CandidateReviewService:
 
     def archive_candidate(self, candidate_id: str) -> MemoryCandidateRecord:
         return self.candidate_worker.archive_candidate(candidate_id)
+
+    def list_segments(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[SessionSegmentRecord]:
+        """List session segments by status, including skipped/failed ones.
+
+        Unlike candidate listing, this surfaces every segment (with its
+        ``error`` reason) regardless of whether it produced a candidate.
+        """
+
+        segments = self.event_store.list_session_segments(status=status)
+        return segments[:limit]
+
+    def get_segment_detail(self, segment_id: str) -> SegmentDetail:
+        """Fetch a segment with its raw event log.
+
+        Kept separate from listing because hook event logs can be noisy or
+        sensitive, so the event payloads are only loaded on explicit request.
+        """
+
+        segment = self.event_store.get_session_segment(segment_id)
+        if segment is None:
+            raise ValueError(f"session segment not found: {segment_id}")
+        return SegmentDetail(
+            segment=segment,
+            events=self.event_store.list_events_for_session_segment(segment),
+        )
 
     def retry_segment(self, segment_id: str) -> SessionSegmentRecord:
         segment = self.event_store.get_session_segment(segment_id)
