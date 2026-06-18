@@ -34,6 +34,10 @@ def create(
         help="What the agent should do next time.",
     ),
     tag: list[str] | None = typer.Option(None),
+    project: str | None = typer.Option(
+        None,
+        help="Repo scope for this memory. Omit for a global memory.",
+    ),
     root: Path = typer.Option(Path(".memory-mcp")),
 ) -> None:
     record = _store(root).create_memory(
@@ -42,6 +46,7 @@ def create(
             when_useful=situation,
             helpful_explanation=action,
             tags=tag or [],
+            project=project,
         )
     )
     typer.echo(record.model_dump_json(indent=2))
@@ -69,6 +74,10 @@ def search(
     limit: int = typer.Option(5),
     tag: list[str] | None = typer.Option(None),
     min_score: float = typer.Option(0.0),
+    project: str | None = typer.Option(
+        None,
+        help="Scope retrieval to this repo's memories plus global ones.",
+    ),
     root: Path = typer.Option(Path(".memory-mcp")),
 ) -> None:
     results = _store(root).search_memories(
@@ -76,6 +85,7 @@ def search(
         limit=limit,
         tags=tag or None,
         min_score=min_score,
+        project=project,
     )
     typer.echo(
         "[\n"

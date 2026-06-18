@@ -61,8 +61,11 @@ def build_mcp(
         limit: int = 5,
         tags: list[str] | None = None,
         min_score: float = 0.0,
+        project: str | None = None,
     ) -> dict[str, Any]:
-        """Retrieve relevant memories for the current task."""
+        """Retrieve relevant memories for the current task. Pass ``project``
+        (the repo path/identifier) to scope retrieval to that repo's memories
+        plus global ones; omit it to search across all projects."""
 
         return search_memory_tool(
             memory_store,
@@ -70,7 +73,9 @@ def build_mcp(
             limit=limit,
             tags=tags,
             min_score=min_score,
+            project=project,
             event_store=events,
+            event_context={"project": project} if project is not None else None,
         )
 
     @mcp.tool()
@@ -86,8 +91,11 @@ def build_mcp(
         helpful_explanation: str,
         tags: list[str] | None = None,
         source: dict[str, Any] | None = None,
+        project: str | None = None,
     ) -> dict[str, Any]:
-        """Create one explicit memory."""
+        """Create one explicit memory. Pass ``project`` (the repo
+        path/identifier) to scope it to that repo; omit it for a global memory
+        that surfaces in every project."""
 
         return create_memory_tool(
             memory_store,
@@ -96,6 +104,7 @@ def build_mcp(
             helpful_explanation=helpful_explanation,
             tags=tags,
             source=source,
+            project=project,
         )
 
     @mcp.tool()

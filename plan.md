@@ -1219,40 +1219,39 @@ reasons already added to `ExtractionWorkerResult`.)
 - tests: segment listing/reasons via the service and API; CLI lists skipped
   reasons; event-log retrieval returns the expected events
 
-### Milestone 17: Project-Scoped Memory And Retrieval
+### Milestone 17: Project-Scoped Memory And Retrieval (done)
 
 Give memories a project/repo scope so semantic search can filter to the relevant
 repository. This closes the "Should memories be scoped per project?" open question
 and matches the "Scope memories by project" V1 default.
 
-Current gap: `project` exists on `events` and `session_segments` (indexed) but is
-dropped at the candidate stage, so `MemoryRecord` has no project at all. The MCP
-`memory_search` tool already receives the caller's `project` in `event_context`
-(`service.py`) but only uses it to log the retrieval event — it is not used to
-filter. So the scope already reaches the search call and is discarded.
-
-- model: add `project: str | None = None` to `MemoryCreate` / `MemoryRecord`, plus
-  a denormalized `memories.project` column + index for efficient filtering and
-  `list_memories(project=...)`
-- propagation:
-  - approval path derives project from the candidate's source segment (the review
-    service already joins candidate -> segment -> project for its candidate filter)
-  - manual `memory_create` accepts a `project` param / takes it from context
-  - existing memories stay `project = None` (global); optional later backfill from
-    the source segment
-- retrieval: add a `project` filter to `search_memories` (Python-side, alongside
-  the existing tag/min_score filtering), and wire the MCP tool to pass its context
-  project so retrieval is repo-scoped by default
-- decision A (scoping semantics): strict (only the repo's memories) vs inclusive
-  (repo's + global project-less memories). Lean inclusive so cross-cutting lessons
-  and pre-existing memories still surface; provide an explicit way to widen to all
-- decision B (repo identity): `project` is currently the captured cwd path, which
-  is not a stable repo identity (worktrees, clones, subdirectories differ). For
-  true git-repo scoping, normalize at capture in the adapters to the git toplevel
-  (`git rev-parse --show-toplevel`) or the remote/repo name. Decide whether to do
-  this alongside or keep raw cwd for now
-- tests: repo-scoped search returns the repo's + global memories and excludes other
-  repos; approval carries project through to the memory; manual create sets project
+- [x] model: added `project: str | None = None` to `MemoryCreate` (inherited by
+  `MemoryRecord`), plus a denormalized `memories.project` column + index. A
+  `PRAGMA table_info` check (`_ensure_memories_project_column`) backfills the
+  column in pre-M17 stores in place; existing rows load as `project = None`
+  (global), and `project` is immutable after create so the update path leaves the
+  column alone.
+- [x] propagation:
+  - approval path derives project from the candidate's source segment
+    (`CandidateWorker._candidate_project` -> `get_session_segment(...).project`);
+    a merged candidate has no single segment and approves as global (`None`)
+  - manual `memory_create` (service + `memory-mcp create --project`) accepts a
+    `project` param
+  - existing memories stay `project = None` (global)
+- [x] retrieval: added a `project` filter to `search_memories` (Python-side,
+  alongside tag/min_score), `list_memories(project=...)`, and wired the MCP
+  `memory_search` tool + `memory-mcp search --project` to pass it; the service
+  defaults the scope from `event_context["project"]` when not given explicitly
+- [x] decision A (scoping semantics): **inclusive** — a scoped search returns the
+  repo's own memories plus global (project-less) memories and excludes other
+  repos; `project=None` widens to all projects (the explicit escape hatch)
+- [x] decision B (repo identity): **kept raw captured cwd** for the MVP. Adapters
+  still record `project` as the cwd path; normalizing to the git toplevel /
+  remote name is deferred (a future capture-time change, no schema impact)
+- [x] tests (`tests/test_project_scope.py`): inclusive repo+global search excludes
+  other repos, no-project search returns all, `list_memories(project=...)`
+  filters, manual create sets project, `event_context` scopes retrieval, approval
+  carries the segment project, merged candidate approves as global
 
 ## Non-Goals For V1
 
@@ -1279,6 +1278,8 @@ filter. So the scope already reaches the search call and is discarded.
 
 - Should explicit user-created memories bypass processing pipeline approval?
 - Should memories be scoped globally, per project, per user, or per agent?
+  (Resolved for V1 in Milestone 17: per-project with inclusive global fallback;
+  per-user/per-agent deferred to the multi-user service in Milestone 14.)
 - Should the processing pipeline infer usage from final answers, or only trust explicit `memory_feedback` at first?
 - How aggressive should decay be for memories that are rarely used?
 - Which processing pipeline candidate types should be auto-created versus marked pending review?
