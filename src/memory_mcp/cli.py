@@ -6,6 +6,7 @@ from pathlib import Path
 import typer
 
 from memory_mcp.core.embeddings import LangChainHuggingFaceEmbedder
+from memory_mcp.core.events import EventStore
 from memory_mcp.core.models import MemoryCreate
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.pipeline.extractors import ClaudeCliExtractor, CodexCliExtractor
@@ -34,6 +35,10 @@ def create(
         help="What the agent should do next time.",
     ),
     tag: list[str] | None = typer.Option(None),
+    project: str | None = typer.Option(
+        None,
+        help="Repo scope for this memory. Omit for a global memory.",
+    ),
     root: Path = typer.Option(Path(".memory-mcp")),
 ) -> None:
     record = _store(root).create_memory(
@@ -42,6 +47,7 @@ def create(
             when_useful=situation,
             helpful_explanation=action,
             tags=tag or [],
+            project=project,
         )
     )
     typer.echo(record.model_dump_json(indent=2))
@@ -69,6 +75,10 @@ def search(
     limit: int = typer.Option(5),
     tag: list[str] | None = typer.Option(None),
     min_score: float = typer.Option(0.0),
+    project: str | None = typer.Option(
+        None,
+        help="Scope retrieval to this repo's memories plus global ones.",
+    ),
     root: Path = typer.Option(Path(".memory-mcp")),
 ) -> None:
     results = _store(root).search_memories(
@@ -76,6 +86,7 @@ def search(
         limit=limit,
         tags=tag or None,
         min_score=min_score,
+        project=project,
     )
     typer.echo(
         "[\n"
@@ -103,6 +114,56 @@ def install_model(
     embedder = LangChainHuggingFaceEmbedder(model_name=model_name)
     vector = embedder.embed_text("memory mcp embedding model warmup")
     typer.echo(f"installed {model_name} ({len(vector)} dimensions)")
+
+
+@app.command("segments")
+def list_segments(
+    status: str | None = typer.Option(
+        None,
+        help="Filter by status: open, idle, processed, skipped, failed. Omit for all.",
+    ),
+    limit: int = typer.Option(50, min=1, help="Maximum segments to return."),
+    root: Path = typer.Option(Path(".memory-mcp")),
+) -> None:
+    """List session segments with their status and skip/fail reason (``error``)."""
+
+    segments = EventStore(root).list_session_segments(status=status)
+    listed = segments[:limit]
+    typer.echo(
+        json.dumps(
+            {
+                "status": status,
+                "total": len(segments),
+                "returned": len(listed),
+                "segments": [segment.model_dump(mode="json") for segment in listed],
+            },
+            indent=2,
+        )
+    )
+
+
+@app.command("segment-events")
+def segment_events(
+    segment_id: str,
+    root: Path = typer.Option(Path(".memory-mcp")),
+) -> None:
+    """Print one segment's raw event log (already redacted at write time)."""
+
+    store = EventStore(root)
+    segment = store.get_session_segment(segment_id)
+    if segment is None:
+        typer.echo(json.dumps({"error": f"session segment not found: {segment_id}"}))
+        raise typer.Exit(1)
+    events = store.list_events_for_session_segment(segment)
+    typer.echo(
+        json.dumps(
+            {
+                "segment": segment.model_dump(mode="json"),
+                "events": [event.model_dump(mode="json") for event in events],
+            },
+            indent=2,
+        )
+    )
 
 
 @app.command("status")

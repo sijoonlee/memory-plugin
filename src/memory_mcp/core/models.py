@@ -48,6 +48,9 @@ class MemoryCreate(BaseModel):
     source: MemorySource = Field(default_factory=MemorySource)
     confidence: float = Field(default=0.7, ge=0.0, le=1.0)
     score: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Repo/project scope. ``None`` means a global memory that surfaces for every
+    # project (inclusive scoping); a value scopes the memory to that repo.
+    project: str | None = None
 
 
 class MemoryRecord(MemoryCreate):

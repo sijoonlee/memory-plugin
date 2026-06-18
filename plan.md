@@ -1192,7 +1192,7 @@ agent- or transport-specific assumptions into core retrieval, scoring, or review
   table (verified via search), unknown id is a safe no-op, deleting one memory
   leaves others intact, and the service wrapper reports the outcome
 
-### Milestone 16: Segment Observability And Session Log Viewing
+### Milestone 16: Segment Observability And Session Log Viewing (done)
 
 Make the extraction pipeline transparent: surface *why* each session segment was
 skipped, failed, or picked, and let a reviewer read the underlying session event
@@ -1201,58 +1201,67 @@ log. The data already exists — `session_segments.error` holds the LLM's
 `list_events_for_session_segment` returns a segment's events, and a candidate's
 `evidence_event_ids` / `source_session_segment_id` explain why it was picked —
 but today it is buried in the database. (Builds on the `process`-output skip/fail
-reasons already added to `ExtractionWorkerResult`.)
+reasons already added to `ExtractionWorkerResult`.) Built incrementally as three
+tested slices: CLI, then review API, then review UI.
 
-- CLI surface: a `memory-mcp segments` command to list segments by status
-  (`idle` / `processed` / `skipped` / `failed`) with their reason/error, and a
-  way to print one segment's event log
-- review API: expose skipped/failed segments and their reasons (not just
-  candidate-attached segments), plus a segment event-log endpoint
-- review UI:
-  - a segments view showing skipped/failed/processed segments with the reason
-  - per-segment session log (raw events), kept opt-in because hook logs can be
-    noisy or sensitive
-  - for a picked candidate, show its evidence events and source segment so
-    "why this became a memory" is visible
-- decide delivery target: the local review UI now versus the Milestone 14
-  frontend (the local UI is slated to be replaced); resolve when M14 is scoped
-- tests: segment listing/reasons via the service and API; CLI lists skipped
-  reasons; event-log retrieval returns the expected events
+- [x] CLI surface (`cli.py`): `memory-mcp segments [--status] [--limit]` lists
+  segments with their status and `error` reason; `memory-mcp segment-events
+  <segment_id>` prints one segment's (already-redacted) raw event log. Both reuse
+  `EventStore.list_session_segments` / `get_session_segment` /
+  `list_events_for_session_segment`; no new storage code.
+- [x] review API: `CandidateReviewService.list_segments(status, limit)` and
+  `get_segment_detail(segment_id)` (new `SegmentDetail` model = segment + events),
+  exposed as `GET /api/segments` and `GET /api/segments/{id}/events` in
+  `review/server.py`. Surfaces every segment (incl. skipped/failed), not just
+  candidate-attached ones; event payloads load only on the events call.
+- [x] review UI (`review/static/`): segments surfaced via a "Segments" optgroup in
+  the existing status dropdown (skipped/failed/processed/all), reusing the
+  "Active Memories" routing pattern; segment detail shows the reason prominently
+  with an opt-in "Show Event Log" toggle and the existing Retry Extraction button.
+  Status dropdown now auto-loads on change; `app.js?v=m16` cache-bust. The
+  "why a candidate became a memory" view (evidence events + source segment) was
+  already covered by the existing candidate detail.
+- [x] decision (delivery target): **local review UI now**. M14's frontend is not
+  yet scoped, so the local UI is the only surface available; the segments view
+  reuses existing scaffolding and is cheap to drop if M14 later replaces it.
+- [x] tests: `tests/test_cli.py` (status filter, all-status, event log, missing
+  segment), `tests/test_review_service.py` (listing/reasons/limit, event log,
+  missing segment), `tests/test_review_server.py` (list + event-log endpoints,
+  missing-segment 400). Full suite green (127 passed).
 
-### Milestone 17: Project-Scoped Memory And Retrieval
+### Milestone 17: Project-Scoped Memory And Retrieval (done)
 
 Give memories a project/repo scope so semantic search can filter to the relevant
 repository. This closes the "Should memories be scoped per project?" open question
 and matches the "Scope memories by project" V1 default.
 
-Current gap: `project` exists on `events` and `session_segments` (indexed) but is
-dropped at the candidate stage, so `MemoryRecord` has no project at all. The MCP
-`memory_search` tool already receives the caller's `project` in `event_context`
-(`service.py`) but only uses it to log the retrieval event — it is not used to
-filter. So the scope already reaches the search call and is discarded.
-
-- model: add `project: str | None = None` to `MemoryCreate` / `MemoryRecord`, plus
-  a denormalized `memories.project` column + index for efficient filtering and
-  `list_memories(project=...)`
-- propagation:
-  - approval path derives project from the candidate's source segment (the review
-    service already joins candidate -> segment -> project for its candidate filter)
-  - manual `memory_create` accepts a `project` param / takes it from context
-  - existing memories stay `project = None` (global); optional later backfill from
-    the source segment
-- retrieval: add a `project` filter to `search_memories` (Python-side, alongside
-  the existing tag/min_score filtering), and wire the MCP tool to pass its context
-  project so retrieval is repo-scoped by default
-- decision A (scoping semantics): strict (only the repo's memories) vs inclusive
-  (repo's + global project-less memories). Lean inclusive so cross-cutting lessons
-  and pre-existing memories still surface; provide an explicit way to widen to all
-- decision B (repo identity): `project` is currently the captured cwd path, which
-  is not a stable repo identity (worktrees, clones, subdirectories differ). For
-  true git-repo scoping, normalize at capture in the adapters to the git toplevel
-  (`git rev-parse --show-toplevel`) or the remote/repo name. Decide whether to do
-  this alongside or keep raw cwd for now
-- tests: repo-scoped search returns the repo's + global memories and excludes other
-  repos; approval carries project through to the memory; manual create sets project
+- [x] model: added `project: str | None = None` to `MemoryCreate` (inherited by
+  `MemoryRecord`), plus a denormalized `memories.project` column + index. A
+  `PRAGMA table_info` check (`_ensure_memories_project_column`) backfills the
+  column in pre-M17 stores in place; existing rows load as `project = None`
+  (global), and `project` is immutable after create so the update path leaves the
+  column alone.
+- [x] propagation:
+  - approval path derives project from the candidate's source segment
+    (`CandidateWorker._candidate_project` -> `get_session_segment(...).project`);
+    a merged candidate has no single segment and approves as global (`None`)
+  - manual `memory_create` (service + `memory-mcp create --project`) accepts a
+    `project` param
+  - existing memories stay `project = None` (global)
+- [x] retrieval: added a `project` filter to `search_memories` (Python-side,
+  alongside tag/min_score), `list_memories(project=...)`, and wired the MCP
+  `memory_search` tool + `memory-mcp search --project` to pass it; the service
+  defaults the scope from `event_context["project"]` when not given explicitly
+- [x] decision A (scoping semantics): **inclusive** — a scoped search returns the
+  repo's own memories plus global (project-less) memories and excludes other
+  repos; `project=None` widens to all projects (the explicit escape hatch)
+- [x] decision B (repo identity): **kept raw captured cwd** for the MVP. Adapters
+  still record `project` as the cwd path; normalizing to the git toplevel /
+  remote name is deferred (a future capture-time change, no schema impact)
+- [x] tests (`tests/test_project_scope.py`): inclusive repo+global search excludes
+  other repos, no-project search returns all, `list_memories(project=...)`
+  filters, manual create sets project, `event_context` scopes retrieval, approval
+  carries the segment project, merged candidate approves as global
 
 ## Non-Goals For V1
 
@@ -1279,6 +1288,8 @@ filter. So the scope already reaches the search call and is discarded.
 
 - Should explicit user-created memories bypass processing pipeline approval?
 - Should memories be scoped globally, per project, per user, or per agent?
+  (Resolved for V1 in Milestone 17: per-project with inclusive global fallback;
+  per-user/per-agent deferred to the multi-user service in Milestone 14.)
 - Should the processing pipeline infer usage from final answers, or only trust explicit `memory_feedback` at first?
 - How aggressive should decay be for memories that are rarely used?
 - Which processing pipeline candidate types should be auto-created versus marked pending review?

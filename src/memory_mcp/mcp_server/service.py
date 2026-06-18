@@ -13,6 +13,7 @@ _MEMORY_SUMMARY_FIELDS = (
     "when_useful",
     "helpful_explanation",
     "tags",
+    "project",
     "status",
     "score",
     "confidence",
@@ -27,14 +28,20 @@ def memory_search(
     limit: int = 5,
     tags: list[str] | None = None,
     min_score: float = 0.0,
+    project: str | None = None,
     event_store: EventStore | None = None,
     event_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # Default the retrieval scope to the caller's project so search is
+    # repo-scoped (inclusive of global memories) unless overridden.
+    if project is None:
+        project = _context_value(event_context, "project")
     results = store.search_memories(
         query,
         limit=limit,
         tags=tags,
         min_score=min_score,
+        project=project,
     )
     response = {
         "memories": [
@@ -97,6 +104,7 @@ def memory_create(
     helpful_explanation: str,
     tags: list[str] | None = None,
     source: dict[str, Any] | None = None,
+    project: str | None = None,
 ) -> dict[str, Any]:
     record = store.create_memory(
         MemoryCreate(
@@ -105,6 +113,7 @@ def memory_create(
             helpful_explanation=helpful_explanation,
             tags=tags or [],
             source=MemorySource.model_validate(source or {"kind": "manual"}),
+            project=project,
         )
     )
     return {"memory": record.model_dump(mode="json")}

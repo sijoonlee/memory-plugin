@@ -81,7 +81,9 @@ class CandidateWorker:
         if candidate.status != "pending_review":
             raise ValueError(f"candidate is not pending_review: {candidate.status}")
 
-        memory = self.memory_store.create_memory(_candidate_to_memory_create(candidate))
+        memory = self.memory_store.create_memory(
+            _candidate_to_memory_create(candidate, project=self._candidate_project(candidate))
+        )
         now = utc_now()
         dedupe = memory.source.extra.get("dedupe", {})
         if memory.status == "rejected":
@@ -241,14 +243,31 @@ class CandidateWorker:
             raise ValueError(f"candidate not found: {candidate_id}")
         return candidate
 
+    def _candidate_project(self, candidate: MemoryCandidateRecord) -> str | None:
+        """Derive the repo scope for an approved candidate from its source segment.
 
-def _candidate_to_memory_create(candidate: MemoryCandidateRecord) -> MemoryCreate:
+        A merged candidate has no single source segment; the project then stays
+        ``None`` (global) since the merge may span repos.
+        """
+
+        if candidate.source_session_segment_id is None:
+            return None
+        segment = self.event_store.get_session_segment(candidate.source_session_segment_id)
+        return segment.project if segment is not None else None
+
+
+def _candidate_to_memory_create(
+    candidate: MemoryCandidateRecord,
+    *,
+    project: str | None = None,
+) -> MemoryCreate:
     return MemoryCreate(
         what_happened=candidate.lesson,
         when_useful=candidate.situation,
         helpful_explanation=candidate.action,
         tags=[candidate.category],
         confidence=candidate.confidence,
+        project=project,
         source=MemorySource(
             kind="pipeline_candidate",
             evidence_event_ids=candidate.evidence_event_ids,

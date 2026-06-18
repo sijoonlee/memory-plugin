@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from starlette.testclient import TestClient
 
-from memory_mcp.core.events import EventStore, MemoryCandidateCreate
+from memory_mcp.core.events import (
+    EventCreate,
+    EventStore,
+    MemoryCandidateCreate,
+    SessionSegmentRecord,
+)
 from memory_mcp.core.models import MemoryCreate
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.review.server import create_app
@@ -109,3 +116,53 @@ def test_review_server_reject_requires_reason(tmp_path) -> None:
 
     assert response.status_code == 400
     assert response.json()["error"] == "reason is required"
+
+
+def test_review_server_lists_segments_and_event_log(tmp_path) -> None:
+    root = tmp_path / "memory"
+    event_store = EventStore(root)
+    event_store.upsert_session_segment(
+        SessionSegmentRecord(
+            id="seg_skipped",
+            project="/repo",
+            session_id="s1",
+            segment_index=0,
+            first_event_at=datetime(2026, 6, 14, 0, 0, tzinfo=timezone.utc),
+            last_event_at=datetime(2026, 6, 14, 1, 0, tzinfo=timezone.utc),
+            event_count=1,
+            status="skipped",
+            error="No durable memory candidate found.",
+        )
+    )
+    event_store.append_event(
+        EventCreate(
+            event_type="tool_result",
+            source="test",
+            project="/repo",
+            session_id="s1",
+            payload={"message": "ran pytest"},
+        ),
+        created_at=datetime(2026, 6, 14, 0, 30, tzinfo=timezone.utc),
+    )
+    client = TestClient(create_app(root))
+
+    listed = client.get("/api/segments?status=skipped").json()
+    assert listed["status"] == "skipped"
+    assert listed["total"] == 1
+    assert listed["segments"][0]["id"] == "seg_skipped"
+    assert listed["segments"][0]["error"] == "No durable memory candidate found."
+
+    detail = client.get("/api/segments/seg_skipped/events").json()
+    assert detail["segment"]["id"] == "seg_skipped"
+    assert [event["payload"]["message"] for event in detail["events"]] == ["ran pytest"]
+
+
+def test_review_server_segment_events_missing_returns_400(tmp_path) -> None:
+    root = tmp_path / "memory"
+    EventStore(root)
+    client = TestClient(create_app(root))
+
+    response = client.get("/api/segments/seg_nope/events")
+
+    assert response.status_code == 400
+    assert "session segment not found" in response.json()["error"]

@@ -108,7 +108,15 @@ class LocalMemoryStore:
         limit: int = 5,
         tags: list[str] | None = None,
         min_score: float = 0.0,
+        project: str | None = None,
     ) -> list[MemorySearchResult]:
+        """Semantic search over active memories.
+
+        When ``project`` is given, scoping is *inclusive*: the repo's own
+        memories and global (project-less) memories are returned, but other
+        repos' memories are excluded. ``project=None`` searches everything.
+        """
+
         if limit <= 0 or not self._vector_table_exists():
             return []
 
@@ -122,6 +130,8 @@ class LocalMemoryStore:
             memory_id = raw["id"]
             record = self.get_memory(memory_id)
             if record is None or record.status != "active":
+                continue
+            if project is not None and record.project not in (project, None):
                 continue
             if tags and not set(tags).issubset(set(record.tags)):
                 continue
@@ -160,15 +170,26 @@ class LocalMemoryStore:
                 count += 1
         return count
 
-    def list_memories(self, *, status: str | None = None) -> list[MemoryRecord]:
+    def list_memories(
+        self,
+        *,
+        status: str | None = None,
+        project: str | None = None,
+    ) -> list[MemoryRecord]:
         query = "SELECT record_json FROM memories"
-        params: tuple[Any, ...] = ()
+        clauses: list[str] = []
+        params: list[Any] = []
         if status is not None:
-            query += " WHERE status = ?"
-            params = (status,)
+            clauses.append("status = ?")
+            params.append(status)
+        if project is not None:
+            clauses.append("project = ?")
+            params.append(project)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY created_at, id"
         with self._connect_sqlite() as conn:
-            rows = conn.execute(query, params).fetchall()
+            rows = conn.execute(query, tuple(params)).fetchall()
         return [MemoryRecord.model_validate_json(row["record_json"]) for row in rows]
 
     def update_memory(self, record: MemoryRecord) -> None:
@@ -247,8 +268,12 @@ class LocalMemoryStore:
                 )
                 """
             )
+            self._ensure_memories_project_column(conn)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project)"
             )
             conn.execute(
                 """
@@ -269,6 +294,13 @@ class LocalMemoryStore:
                 """
             )
             checkpoints.create_checkpoints_table(conn)
+
+    def _ensure_memories_project_column(self, conn: sqlite3.Connection) -> None:
+        """Add the denormalized ``project`` column to pre-M17 stores in place."""
+
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(memories)")}
+        if "project" not in columns:
+            conn.execute("ALTER TABLE memories ADD COLUMN project TEXT")
 
     def get_checkpoint(self, name: str) -> str | None:
         with self._connect_sqlite() as conn:
@@ -323,9 +355,9 @@ class LocalMemoryStore:
                 """
                 INSERT INTO memories (
                     id, record_json, content_for_embedding, tags_json, score,
-                    confidence, status, created_at, updated_at
+                    confidence, status, project, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.id,
@@ -335,6 +367,7 @@ class LocalMemoryStore:
                     record.score,
                     record.confidence,
                     record.status,
+                    record.project,
                     _dt_to_text(record.created_at),
                     _dt_to_text(record.updated_at),
                 ),
