@@ -13,6 +13,7 @@ _MEMORY_SUMMARY_FIELDS = (
     "when_useful",
     "helpful_explanation",
     "tags",
+    "project",
     "status",
     "score",
     "confidence",
