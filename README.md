@@ -71,10 +71,13 @@ cleanly it is usually low-signal, so the extractor is told to skip it.
 | `project` | Ongoing work, goals, or constraints **not derivable from the code or git history** | "The shared registry is post-V1; keep the local store as source of truth." |
 | `reference` | A pointer to an external resource (URL, doc, dashboard, ticket) | "Deploy runbook: https://example.com/runbook" |
 
-The type is **optional** — a memory may be untyped (`null`) when neither the
-classifier nor the caller assigned one (e.g. older rows predating the taxonomy;
-no backfill is performed). It is surfaced everywhere a memory is: `memory_create`
-and `memory_search` (CLI + MCP), the review UI, and the `Type` filter there.
+A type is **mandatory** wherever a memory is created: manual `memory_create`
+(CLI + MCP) rejects a missing or out-of-taxonomy value, and the extractor only
+saves a candidate it could classify. An untyped (`null`) memory is therefore not
+a valid state going forward — it only appears on legacy rows predating the
+taxonomy (no backfill is performed). The type is surfaced everywhere a memory is:
+`memory_create` and `memory_search` (CLI + MCP), the review UI, and the `Type`
+filter there.
 
 ## Daily Workflow
 
@@ -183,8 +186,8 @@ Fields:
 
 - `--when-useful`: the recall cue — when this memory should be retrieved
 - `--details`: the memory body — what was learned and how to apply it
-- `--memory-type`: one of `user` | `feedback` | `project` | `reference` (see
-  [Memory Types](#memory-types)); omit to leave it untyped
+- `--memory-type`: **required** — one of `user` | `feedback` | `project` |
+  `reference` (see [Memory Types](#memory-types))
 - `--tag`: optional repeated tag value
 - `--project`: repo scope for this memory; omit for a global memory
 - `--root`: optional memory store root, default `.memory-mcp`

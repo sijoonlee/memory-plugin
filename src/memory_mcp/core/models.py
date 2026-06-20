@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,8 @@ MemoryStatus = Literal[
 # Constrained 4-value taxonomy (M19). ``None`` means untyped (e.g. legacy rows,
 # or a manual memory the caller didn't classify) — no backfill is performed.
 MemoryType = Literal["user", "feedback", "project", "reference"]
+# Allowed values, for validating manual-create input (where a type is mandatory).
+MEMORY_TYPES: tuple[str, ...] = get_args(MemoryType)
 MemoryFeedbackSignal = Literal[
     "retrieved",
     "used",

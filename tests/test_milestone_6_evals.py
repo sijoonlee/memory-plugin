@@ -136,6 +136,7 @@ def test_eval_mcp_tool_contract_and_feedback_events(tmp_path) -> None:
         store,
         when_useful="When running tests in this repo.",
         details="Direct pytest used the wrong environment. Use uv run pytest.",
+        memory_type="feedback",
         tags=["testing"],
         source={"kind": "manual"},
     )

@@ -44,6 +44,7 @@ def test_read_only_inspection_tools(tmp_path) -> None:
         store,
         when_useful="when running this project's tests",
         details="ran pytest with uv; use `uv run pytest`",
+        memory_type="feedback",
     )
     memory_id = created["memory"]["id"]
 
@@ -78,7 +79,13 @@ def test_memory_list_respects_limit(tmp_path) -> None:
         ("When handling timezone math.", "Store timestamps in UTC; convert on display.", "time"),
     ]
     for when_useful, details, tag in topics:
-        memory_create(store, when_useful=when_useful, details=details, tags=[tag])
+        memory_create(
+            store,
+            when_useful=when_useful,
+            details=details,
+            memory_type="project",
+            tags=[tag],
+        )
 
     listed = memory_list(store, status="active", limit=2)
     assert listed["total"] == 3

@@ -7,7 +7,7 @@ import typer
 
 from memory_mcp.core.embeddings import LangChainHuggingFaceEmbedder
 from memory_mcp.core.events import EventStore
-from memory_mcp.core.models import MemoryCreate
+from memory_mcp.core.models import MEMORY_TYPES, MemoryCreate
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.pipeline.extractors import ClaudeCliExtractor, CodexCliExtractor
 from memory_mcp.operator import OperatorWorkflow
@@ -30,10 +30,10 @@ def create(
         ...,
         help="The memory body: what was learned and how to apply it.",
     ),
-    memory_type: str | None = typer.Option(
-        None,
+    memory_type: str = typer.Option(
+        ...,
         "--memory-type",
-        help="Type: user | feedback | project | reference. Omit to leave untyped.",
+        help="Required type: user | feedback | project | reference.",
     ),
     tag: list[str] | None = typer.Option(None),
     project: str | None = typer.Option(
@@ -42,6 +42,11 @@ def create(
     ),
     root: Path = typer.Option(Path(".memory-mcp")),
 ) -> None:
+    # A type is mandatory on manual creation — untyped is not a valid memory.
+    if memory_type not in MEMORY_TYPES:
+        raise typer.BadParameter(
+            f"--memory-type must be one of {list(MEMORY_TYPES)}, got {memory_type!r}"
+        )
     record = _store(root).create_memory(
         MemoryCreate(
             when_useful=when_useful,
