@@ -68,6 +68,9 @@ class MemoryRecord(MemoryCreate):
     positive_feedback_count: int = 0
     negative_feedback_count: int = 0
     status: MemoryStatus = "active"
+    # Review-inbox flag, orthogonal to ``status``: ``False`` = unread (not yet
+    # checked by the user), ``True`` = read. Does not affect retrieval.
+    is_reviewed: bool = False
 
 
 class MemorySearchResult(BaseModel):

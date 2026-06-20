@@ -54,7 +54,7 @@ Command surfaces:
 - `memory-mcp`: normal operator workflow plus memory create/search/get/export
 - `memory-mcp-server`: run the MCP stdio server
 - `memory-mcp-event`: append hook/event log rows and inspect event backlog
-- `memory-mcp-review`: run the local human review UI/API for pending candidates
+- `memory-mcp-review`: run the local memory-manager UI/API (unread inbox, archive, delete)
 
 ## Daily Workflow
 
@@ -66,14 +66,15 @@ uv run memory-mcp process
 uv run memory-mcp review
 ```
 
-`status` prints one JSON summary of event backlog, session segments, memory
-candidates, and memory status counts.
+`status` prints one JSON summary of event backlog, session segments, and memory
+counts by status (including the `unread` inbox count).
 
 `process` runs the MVP pipeline:
 
 1. process pending retrieval/feedback events
 2. refresh session segments from captured events
-3. extract pending memory candidates from idle segments
+3. extract memories from idle segments — these are created **active** (searchable
+   immediately) and start **unread** for the review inbox; there is no approval gate
 4. apply daily score decay unless disabled
 
 Use Codex as the extraction agent:
@@ -110,11 +111,17 @@ calling the extractor:
 uv run memory-mcp process --extraction-limit 0
 ```
 
-`review` starts the local candidate review UI:
+`review` starts the local memory-manager UI:
 
 ```bash
 uv run memory-mcp review
 ```
+
+Extraction creates active memories directly (no approval queue). The UI is a memory
+manager: an **Unread inbox** (memories you haven't checked yet), plus **All active**,
+**Manual**, and **Archived** views. Per memory you can toggle read/unread, **archive**
+(soft delete — reversible, hidden from search, kept for audit), or **delete**
+(permanent). `is_reviewed` is just your review marker; it does not affect retrieval.
 
 Open:
 
@@ -469,23 +476,25 @@ absent.
 
 ### Pipeline Processing
 
-`memory-mcp process` is the supported way to consume captured events and produce
-reviewable memory candidates.
+`memory-mcp process` is the supported way to consume captured events and create
+memories from idle sessions.
 
 Session statuses are `open`, `idle`, `processed`, `skipped`, and `failed`.
-Candidate statuses are `pending_review`, `approved`, `rejected`, and `merged`.
-Approving a candidate runs the normal memory creation path, including dedupe.
+Memory statuses are `active`, `archived` (soft delete), `stale`, `superseded`, and
+`invalid`; the `is_reviewed` flag (read/unread) is an independent review marker that
+does not affect retrieval. There is no approval gate — extraction creates `active`
+memories directly (running the normal redaction + dedupe path), starting unread.
 
 The extractor can use Codex CLI or Claude Code CLI. Both run non-interactively
-with a JSON schema and write only `pending_review` candidates. They do not
-create active memories directly. By default, extraction receives session events
+with a JSON schema; their structured output is mapped into active memories. By
+default, extraction receives session events
 as input and avoids running inside the project directory so project hooks are not
 triggered recursively. Use `memory-mcp process --project-context` only when
 extraction needs repository file access.
 
 ### `memory-mcp-review`
 
-Run the local candidate review UI:
+Run the local memory-manager UI:
 
 ```bash
 uv run memory-mcp-review serve

@@ -12,12 +12,13 @@ from memory_mcp.pipeline.workers.extraction_worker import ExtractionWorker
 from memory_mcp.pipeline.workers.session_worker import SessionWorker
 
 
-# After the M18-1 unification, candidates and memories share one table; the
-# status set is partitioned into the candidate lifecycle (pre-activation /
-# terminal) and the live-memory lifecycle.
-MEMORY_STATUSES = ["active", "stale", "superseded", "invalid"]
+# After M18-1 candidates and memories share one table; after M18-3 extraction
+# creates active memories directly (no approval gate), so the live-memory
+# lifecycle owns ``archived`` (soft delete) and the candidate partition is just
+# the dormant approval path + merge bookkeeping.
+MEMORY_STATUSES = ["active", "stale", "superseded", "invalid", "archived"]
 SESSION_STATUSES = ["open", "idle", "processed", "skipped", "failed"]
-CANDIDATE_STATUSES = ["pending_review", "rejected", "merged", "archived"]
+CANDIDATE_STATUSES = ["pending_review", "merged"]
 
 
 @dataclass(frozen=True)
@@ -78,8 +79,14 @@ class OperatorWorkflow:
                 for status in CANDIDATE_STATUSES
             },
             memories={
-                status: len(self.memory_store.list_memories(status=status))
-                for status in MEMORY_STATUSES
+                **{
+                    status: len(self.memory_store.list_memories(status=status))
+                    for status in MEMORY_STATUSES
+                },
+                # Cross-cutting review-inbox count (active + unread), not a status.
+                "unread": len(
+                    self.memory_store.list_memories(status="active", is_reviewed=False)
+                ),
             },
         )
 

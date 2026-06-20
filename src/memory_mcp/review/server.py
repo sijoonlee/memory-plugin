@@ -50,7 +50,11 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
         )
 
     async def list_memories(request: Request) -> Response:
-        memories = service.list_active_memories()
+        memories = service.list_memories(
+            status=_optional_query(request, "status", default="active"),
+            is_reviewed=_optional_bool_query(request, "is_reviewed"),
+            manual=_optional_bool_query(request, "manual"),
+        )
         return _json(
             {"memories": [memory.model_dump(mode="json") for memory in memories]}
         )
@@ -59,6 +63,28 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
         memory_id = request.path_params["memory_id"]
         memory = service.get_memory_detail(memory_id)
         return _json({"memory": memory.model_dump(mode="json")})
+
+    async def set_memory_reviewed(request: Request) -> Response:
+        memory_id = request.path_params["memory_id"]
+        body = await _json_body(request)
+        value = bool(body.get("value", True))
+        memory = service.set_reviewed(memory_id, value)
+        return _json({"memory": memory.model_dump(mode="json")})
+
+    async def archive_memory(request: Request) -> Response:
+        memory_id = request.path_params["memory_id"]
+        memory = service.archive_memory(memory_id)
+        return _json({"memory": memory.model_dump(mode="json")})
+
+    async def restore_memory(request: Request) -> Response:
+        memory_id = request.path_params["memory_id"]
+        memory = service.restore_memory(memory_id)
+        return _json({"memory": memory.model_dump(mode="json")})
+
+    async def delete_memory(request: Request) -> Response:
+        memory_id = request.path_params["memory_id"]
+        deleted = service.delete_memory(memory_id)
+        return _json({"deleted": deleted, "memory_id": memory_id})
 
     async def get_candidate(request: Request) -> Response:
         candidate_id = request.path_params["candidate_id"]
@@ -154,6 +180,26 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
                 methods=["GET"],
             ),
             Route(
+                "/api/memories/{memory_id}",
+                _handle_errors(delete_memory),
+                methods=["DELETE"],
+            ),
+            Route(
+                "/api/memories/{memory_id}/reviewed",
+                _handle_errors(set_memory_reviewed),
+                methods=["POST"],
+            ),
+            Route(
+                "/api/memories/{memory_id}/archive",
+                _handle_errors(archive_memory),
+                methods=["POST"],
+            ),
+            Route(
+                "/api/memories/{memory_id}/restore",
+                _handle_errors(restore_memory),
+                methods=["POST"],
+            ),
+            Route(
                 "/api/candidates/{candidate_id}",
                 _handle_errors(get_candidate),
                 methods=["GET"],
@@ -242,3 +288,10 @@ def _optional_float_query(request: Request, name: str) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _optional_bool_query(request: Request, name: str) -> bool | None:
+    value = _optional_query(request, name)
+    if value is None:
+        return None
+    return value.lower() in {"1", "true", "yes"}

@@ -248,7 +248,8 @@ def test_eval_llm_candidate_extraction_good_session_vs_no_memory_session(tmp_pat
     assert event_store.get_session_segment(useful_segment.id).status == "processed"  # type: ignore[union-attr]
     assert skipped.skipped_segments == 1
     assert event_store.get_session_segment(no_memory_segment.id).status == "skipped"  # type: ignore[union-attr]
-    assert len(memory_store.list_memories(status="pending_review")) == 1
+    assert len(memory_store.list_memories(status="active")) == 1
+    assert memory_store.list_memories(status="active")[0].is_reviewed is False
 
 
 def test_eval_candidate_review_edit_approve_and_reject_workflows(tmp_path) -> None:

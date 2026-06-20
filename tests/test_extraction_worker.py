@@ -18,6 +18,50 @@ from memory_mcp.pipeline.workers.session_worker import SessionWorker
 from conftest import FakeEmbedder
 
 
+def test_build_extraction_prompt_truncates_oversized_event_payload() -> None:
+    from memory_mcp.pipeline.extractors import (
+        _MAX_EVENT_PAYLOAD_CHARS,
+        build_extraction_prompt,
+    )
+
+    big_event = _event()
+    big_event = big_event.model_copy(update={"payload": {"prompt": "x" * 500_000}})
+
+    prompt = build_extraction_prompt(segment=_segment(), events=[big_event])
+
+    # The raw 500k-char payload must not appear; it is replaced by a bounded
+    # preview so one giant event cannot blow the model's context window.
+    assert "x" * (_MAX_EVENT_PAYLOAD_CHARS + 1) not in prompt
+    assert '"_truncated": true' in prompt
+    assert len(prompt) < 100_000
+
+
+def test_build_extraction_prompt_bounds_total_events() -> None:
+    import json as _json
+
+    from memory_mcp.pipeline.extractors import (
+        _MAX_PROMPT_EVENTS_CHARS,
+        build_extraction_prompt,
+    )
+
+    base = _event()
+    many = [
+        base.model_copy(update={"id": f"evt_{i}", "payload": {"prompt": "y" * 7000}})
+        for i in range(200)
+    ]
+
+    prompt = build_extraction_prompt(segment=_segment(), events=many)
+
+    # Total events section is bounded; the rest are reported as omitted.
+    assert len(prompt) < _MAX_PROMPT_EVENTS_CHARS + 5000
+    assert '"_events_omitted"' in prompt
+    # The included events are well under the full set of 200.
+    included = _json.loads(
+        prompt.split("<session_events_json>\n", 1)[1].split("\n</session_events_json>", 1)[0]
+    )
+    assert 0 < len(included["events"]) < 200
+
+
 def test_extraction_schema_forbids_additional_properties() -> None:
     schema = ExtractionResult.model_json_schema()
 
@@ -119,7 +163,7 @@ def test_claude_cli_extractor_passes_model_effort_and_schema(monkeypatch) -> Non
     assert "session_events_json" in captured["cmd"][-1]
 
 
-def test_extraction_worker_creates_pending_candidate_from_idle_segment(tmp_path) -> None:
+def test_extraction_worker_creates_active_memory_from_idle_segment(tmp_path) -> None:
     event_store = EventStore(tmp_path / "memory")
     memory_store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
     event = event_store.append_event(
@@ -163,10 +207,12 @@ def test_extraction_worker_creates_pending_candidate_from_idle_segment(tmp_path)
     assert result.remaining_idle_segments == 0
     segment = event_store.list_session_segments()[0]
     assert segment.status == "processed"
-    candidate = memory_store.list_memories(status="pending_review")[0]
-    assert candidate.status == "pending_review"
-    assert candidate.source.extra["source_session_segment_id"] == segment.id
-    assert candidate.source.evidence_event_ids == [event.id]
+    # M18-3: extraction creates an active, unread memory directly (no gate).
+    memory = memory_store.list_memories(status="active")[0]
+    assert memory.status == "active"
+    assert memory.is_reviewed is False
+    assert memory.source.extra["source_session_segment_id"] == segment.id
+    assert memory.source.evidence_event_ids == [event.id]
 
 
 def test_extraction_worker_skips_segment_when_no_memory_found(tmp_path) -> None:
@@ -264,7 +310,7 @@ def test_extraction_worker_can_target_one_idle_segment(tmp_path) -> None:
 
     assert result.processed_segments == 1
     assert event_store.get_session_segment(target_segment.id).status == "processed"  # type: ignore[union-attr]
-    assert memory_store.list_memories(status="pending_review")[0].source.evidence_event_ids == [target_event.id]
+    assert memory_store.list_memories(status="active")[0].source.evidence_event_ids == [target_event.id]
     untouched_segments = [
         segment
         for segment in event_store.list_session_segments()

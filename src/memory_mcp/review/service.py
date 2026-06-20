@@ -109,6 +109,53 @@ class CandidateReviewService:
 
         return self.candidate_worker.memory_store.list_memories(status="active")
 
+    def list_memories(
+        self,
+        *,
+        status: str | None = "active",
+        is_reviewed: bool | None = None,
+        manual: bool | None = None,
+    ) -> list[MemoryRecord]:
+        """Memory-manager listing (M18-3).
+
+        Filters: ``status`` (active/archived/…), ``is_reviewed`` (the read/unread
+        inbox), and ``manual`` (origin = manual ``memory_create``, derived from
+        ``source.kind``). The unread inbox is ``status='active', is_reviewed=False``.
+        """
+
+        memories = self.candidate_worker.memory_store.list_memories(
+            status=status,
+            is_reviewed=is_reviewed,
+        )
+        if manual is not None:
+            memories = [
+                memory
+                for memory in memories
+                if (memory.source.kind == "manual") == manual
+            ]
+        return memories
+
+    def set_reviewed(self, memory_id: str, value: bool) -> MemoryRecord:
+        updated = self.candidate_worker.memory_store.set_reviewed(memory_id, value)
+        if updated is None:
+            raise ValueError(f"memory not found: {memory_id}")
+        return updated
+
+    def archive_memory(self, memory_id: str) -> MemoryRecord:
+        updated = self.candidate_worker.memory_store.archive_memory(memory_id)
+        if updated is None:
+            raise ValueError(f"memory not found: {memory_id}")
+        return updated
+
+    def restore_memory(self, memory_id: str) -> MemoryRecord:
+        updated = self.candidate_worker.memory_store.restore_memory(memory_id)
+        if updated is None:
+            raise ValueError(f"memory not found: {memory_id}")
+        return updated
+
+    def delete_memory(self, memory_id: str) -> bool:
+        return self.candidate_worker.memory_store.delete_memory(memory_id)
+
     def get_memory_detail(self, memory_id: str) -> MemoryRecord:
         """Fetch one active memory by id for read-only display."""
 
