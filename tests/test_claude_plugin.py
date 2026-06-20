@@ -38,8 +38,14 @@ def test_mcp_registration_points_at_wrapper() -> None:
 
 def test_claude_hooks_cover_lifecycle_events() -> None:
     hooks = _load_json("hooks/claude-hooks.json")["hooks"]
-    assert set(hooks) == {"UserPromptSubmit", "PostToolUse", "Stop"}
+    assert set(hooks) == {
+        "SessionStart",
+        "UserPromptSubmit",
+        "PostToolUse",
+        "Stop",
+    }
 
+    # The capture hooks append events; SessionStart instead injects the catalog.
     expected_event_types = {
         "UserPromptSubmit": "user_prompt",
         "PostToolUse": "tool_result",
@@ -53,9 +59,14 @@ def test_claude_hooks_cover_lifecycle_events() -> None:
         ]
         assert len(commands) == 1
         command = commands[0]
-        assert "memory-mcp-event append" in command
+        if event == "SessionStart":
+            # Injects the scoped catalog to stdout — not an append, never --quiet.
+            assert "memory-mcp-event catalog" in command
+            assert "--quiet" not in command
+        else:
+            assert "memory-mcp-event append" in command
+            assert f"--event-type {expected_event_types[event]}" in command
         assert "--adapter claude" in command
-        assert f"--event-type {expected_event_types[event]}" in command
         # Both the uv project dir and the store resolve to the plugin (repo)
         # root so the hook store matches the MCP server store. Project scoping
         # comes from the payload cwd, not a per-project store path.

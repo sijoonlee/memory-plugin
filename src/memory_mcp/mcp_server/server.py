@@ -8,8 +8,10 @@ from mcp.server.fastmcp import FastMCP
 
 from memory_mcp.core.embeddings import LangChainHuggingFaceEmbedder
 from memory_mcp.core.events import EventStore
+from memory_mcp.catalog import CATALOG_DEFAULT_LIMIT
 from memory_mcp.mcp_server.service import (
     candidate_list as candidate_list_tool,
+    memory_catalog as catalog_tool,
     memory_create as create_memory_tool,
     memory_delete as delete_memory_tool,
     memory_feedback as feedback_memory_tool,
@@ -44,6 +46,9 @@ def build_mcp(
         "memory-mcp",
         instructions=(
             "Retrieve and manage compact reusable memories about prior work. "
+            "At the start of work on a project, call memory_catalog(project=<the "
+            "repo path you're working on>) to see what memories exist, then "
+            "memory_get(id) for the full text of any cue that looks relevant. "
             "Use memory_search when prior project context may help the current task. "
             "After memory_search, call memory_feedback only for memories you actually "
             "considered. Use signal='used' when a memory changed your plan, command, "
@@ -75,6 +80,24 @@ def build_mcp(
             min_score=min_score,
             project=project,
             event_store=events,
+            event_context={"project": project} if project is not None else None,
+        )
+
+    @mcp.tool()
+    def memory_catalog(
+        project: str | None = None,
+        limit: int = CATALOG_DEFAULT_LIMIT,
+    ) -> dict[str, Any]:
+        """List this project's memories as a compact catalog (``when_useful`` ->
+        ``id``, grouped by type). Call this at the **start of work** to see what
+        memories exist, then ``memory_get(id)`` for the full text. Pass
+        ``project`` (the repo path you're working on) to scope to that repo's
+        memories plus global ones; omit it to list across all projects."""
+
+        return catalog_tool(
+            memory_store,
+            project=project,
+            limit=limit,
             event_context={"project": project} if project is not None else None,
         )
 

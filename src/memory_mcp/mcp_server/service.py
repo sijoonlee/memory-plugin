@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from memory_mcp.catalog import (
+    CATALOG_DEFAULT_LIMIT,
+    CATALOG_DEFAULT_MAX_WORDS,
+    select_catalog_memories,
+)
 from memory_mcp.core.events import EventCreate, EventStore
 from memory_mcp.core.models import (
     MEMORY_TYPES,
@@ -10,6 +15,7 @@ from memory_mcp.core.models import (
     MemoryRecord,
     MemorySource,
 )
+from memory_mcp.core.projects import resolve_project
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.operator import OperatorWorkflow
 
@@ -39,9 +45,11 @@ def memory_search(
     event_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     # Default the retrieval scope to the caller's project so search is
-    # repo-scoped (inclusive of global memories) unless overridden.
+    # repo-scoped (inclusive of global memories) unless overridden. Normalize to
+    # the repo root so it matches how memories were captured.
     if project is None:
         project = _context_value(event_context, "project")
+    project = resolve_project(project)
     results = store.search_memories(
         query,
         limit=limit,
@@ -96,6 +104,43 @@ def memory_search(
     return response
 
 
+def memory_catalog(
+    store: LocalMemoryStore,
+    project: str | None = None,
+    limit: int = CATALOG_DEFAULT_LIMIT,
+    max_words: int = CATALOG_DEFAULT_MAX_WORDS,
+    event_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Layer-1 catalog: the project's memories as ``when_useful`` -> ``id`` cues.
+
+    Pull this at the start of work to see what memories exist, then call
+    ``memory_get(id)`` for the full text. Scoping is inclusive (the project's own
+    memories plus globals); ``project`` defaults to the caller's context.
+    """
+
+    if project is None:
+        project = _context_value(event_context, "project")
+    project = resolve_project(project)
+    memories = select_catalog_memories(
+        store, project=project, limit=limit, max_words=max_words
+    )
+    return {
+        "project": project,
+        "memories": [
+            {
+                "id": memory.id,
+                "when_useful": memory.when_useful,
+                "memory_type": memory.memory_type,
+            }
+            for memory in memories
+        ],
+        "guidance": (
+            "Call memory_get(<id>) to read a full memory when a cue looks "
+            "relevant. Use memory_search for a situation not listed here."
+        ),
+    }
+
+
 def memory_get(store: LocalMemoryStore, memory_id: str) -> dict[str, Any]:
     record = store.get_memory(memory_id)
     if record is None:
@@ -126,7 +171,7 @@ def memory_create(
             memory_type=memory_type,  # type: ignore[arg-type]
             tags=tags or [],
             source=MemorySource.model_validate(source or {"kind": "manual"}),
-            project=project,
+            project=resolve_project(project),
         )
     )
     return {"memory": record.model_dump(mode="json")}

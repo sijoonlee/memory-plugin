@@ -7,7 +7,13 @@ import typer
 
 from memory_mcp.core.embeddings import LangChainHuggingFaceEmbedder
 from memory_mcp.core.events import EventStore
+from memory_mcp.catalog import (
+    CATALOG_DEFAULT_LIMIT,
+    CATALOG_DEFAULT_MAX_WORDS,
+    render_catalog,
+)
 from memory_mcp.core.models import MEMORY_TYPES, MemoryCreate
+from memory_mcp.core.projects import resolve_project
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.pipeline.extractors import ClaudeCliExtractor, CodexCliExtractor
 from memory_mcp.operator import OperatorWorkflow
@@ -53,7 +59,7 @@ def create(
             details=details,
             memory_type=memory_type,  # type: ignore[arg-type]
             tags=tag or [],
-            project=project,
+            project=resolve_project(project),
         )
     )
     typer.echo(record.model_dump_json(indent=2))
@@ -92,13 +98,45 @@ def search(
         limit=limit,
         tags=tag or None,
         min_score=min_score,
-        project=project,
+        project=resolve_project(project),
     )
     typer.echo(
         "[\n"
         + ",\n".join(result.model_dump_json(indent=2) for result in results)
         + "\n]"
     )
+
+
+@app.command()
+def catalog(
+    project: str | None = typer.Option(
+        None,
+        help="Scope to this repo's memories plus globals. Omit for all memories.",
+    ),
+    limit: int = typer.Option(
+        CATALOG_DEFAULT_LIMIT, help="Maximum memories to list (top by score)."
+    ),
+    max_words: int = typer.Option(
+        CATALOG_DEFAULT_MAX_WORDS,
+        "--max-words",
+        help="Soft word budget for the catalog (~0.75 words per token).",
+    ),
+    root: Path = typer.Option(Path(".memory-mcp")),
+) -> None:
+    """Print the Layer-1 memory catalog (when_useful -> id, grouped by type).
+
+    A thin read-time view; prints nothing for an empty/unscoped-empty store. The
+    project is normalized to the repo root so scoping matches captured memories.
+    """
+
+    block = render_catalog(
+        _store(root),
+        project=resolve_project(project),
+        limit=limit,
+        max_words=max_words,
+    )
+    if block:
+        typer.echo(block)
 
 
 @app.command("export")

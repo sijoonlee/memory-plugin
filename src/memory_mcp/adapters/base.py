@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from memory_mcp.core.events import EventCreate
+from memory_mcp.core.projects import resolve_project
 
 
 def fallback_session_id(source: str, project: str) -> str:
@@ -46,7 +47,11 @@ class BaseAdapter:
         session_id: str | None = None,
         run_id: str | None = None,
     ) -> EventCreate:
-        resolved_project = project or self.extract_project(payload) or os.getcwd()
+        # Normalize to the repo root so the same project keys consistently,
+        # whatever subfolder/cwd the event was captured from.
+        resolved_project = resolve_project(
+            project or self.extract_project(payload) or os.getcwd()
+        )
         resolved_session = (
             session_id
             or self.extract_session_id(payload)

@@ -259,6 +259,19 @@ field — set when the `pending_review` memory is created and carried through to
 
 ## Milestone 20 — Two-layer "memory on demand": catalog `when_useful` → `id`, pull on need
 
+> Status: **implemented**. Read-time view (`catalog.py`), no caching — recomputed
+> whenever asked. Decisions: inclusive scoping (repo + globals); top-5 by score plus
+> a ~1500-word (~2000-token) soft budget; untyped memories excluded; empty store →
+> empty output. CLI: `memory-mcp catalog [--project] [--limit] [--max-words]`.
+>
+> **Project key normalization** (`core/projects.py` `resolve_project`): the `project`
+> field is the *project boundary*, not the literal cwd — the nearest dir with a
+> project manifest (pyproject.toml/package.json/…) walking up, bounded by the git
+> root; falls back to git root, then cwd. Applied at every boundary a raw path
+> enters (capture in `adapters/base.py`; `memory_create`/`memory_search`/
+> `memory_catalog`; CLI `create`/`search`/`catalog`). This keeps one project together
+> across subfolders while keeping monorepo packages distinct.
+
 ### Goal
 Generate a compact **catalog** (Layer 1) of `when_useful` → `id` lines that the host
 can inject; the agent reads full detail **on demand** via `memory_get(id)` (Layer 2).
@@ -311,6 +324,26 @@ prompt (ties back to Milestone 19's extractor work).
 ---
 
 ## Milestone 21 — Use a hook (harness) to inject the catalog
+
+> Status: **implemented as a content-injection SessionStart hook** (after a detour
+> through agent-pull). The hook injects the *catalog content* — reliable awareness
+> with no agent action required — which the instruction-only approach couldn't give.
+> The original scoping objection (a hook only sees `cwd`) was resolved by
+> `resolve_project` (git-root + nearest-marker, M20): the hook reads `cwd` from its
+> stdin payload and normalizes it to the same project key capture uses.
+>
+> Implementation: `memory-mcp-event catalog` (`hooks/cli.py`) reads the SessionStart
+> stdin payload → `cwd` → `resolve_project` → `render_catalog` → **stdout** (never
+> `--quiet`; stdout *is* the injected context). Uses a `NoopEmbedder` so no model
+> loads (~0.1s). Honors `MEMORY_MCP_DISABLE_CAPTURE`. Wired via a `SessionStart`
+> entry in `hooks/claude-hooks.json`.
+>
+> Roles: the **hook** gives guaranteed awareness; the **`memory_catalog` MCP tool**
+> (M20) is the agent's refinement/override (different project, or after forming new
+> memories mid-session). `memory_get(id)` pulls full detail. **Deferred:** a
+> `UserPromptSubmit` variant (per-turn freshness, prompt-filtered).
+>
+> The original hook design notes are kept below for reference.
 
 ### Goal
 Inject the Milestone 20 catalog into the host agent's context **deterministically** via
