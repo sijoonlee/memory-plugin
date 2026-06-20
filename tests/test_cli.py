@@ -45,6 +45,8 @@ def test_create_uses_when_useful_details_flags(monkeypatch, tmp_path) -> None:
             "When running tests in this repo.",
             "--details",
             "Direct pytest used the wrong environment. Use uv run pytest.",
+            "--memory-type",
+            "feedback",
             "--tag",
             "testing",
             "--root",
@@ -57,7 +59,44 @@ def test_create_uses_when_useful_details_flags(monkeypatch, tmp_path) -> None:
     assert captured["memory"].details == (
         "Direct pytest used the wrong environment. Use uv run pytest."
     )
+    assert captured["memory"].memory_type == "feedback"
     assert captured["memory"].tags == ["testing"]
+
+
+def test_create_requires_valid_memory_type(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(cli, "_store", lambda root: FakeStore(root))
+
+    # Missing --memory-type is rejected (the option is required).
+    missing = CliRunner().invoke(
+        cli.app,
+        [
+            "create",
+            "--when-useful",
+            "When running tests.",
+            "--details",
+            "Use uv run pytest.",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert missing.exit_code != 0
+
+    # An out-of-taxonomy value is rejected too.
+    invalid = CliRunner().invoke(
+        cli.app,
+        [
+            "create",
+            "--when-useful",
+            "When running tests.",
+            "--details",
+            "Use uv run pytest.",
+            "--memory-type",
+            "bogus",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert invalid.exit_code != 0
 
 
 def test_process_can_use_claude_extractor_options(monkeypatch, tmp_path) -> None:

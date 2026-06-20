@@ -77,6 +77,7 @@ def test_manual_create_sets_project(tmp_path) -> None:
         store,
         when_useful="Situation.",
         details="Lesson body. Action.",
+        memory_type="project",
         project="/repos/manual",
     )
     record_id = response["memory"]["id"]

@@ -3,7 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from memory_mcp.core.events import EventCreate, EventStore
-from memory_mcp.core.models import MemoryCreate, MemoryFeedback, MemoryRecord, MemorySource
+from memory_mcp.core.models import (
+    MEMORY_TYPES,
+    MemoryCreate,
+    MemoryFeedback,
+    MemoryRecord,
+    MemorySource,
+)
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.operator import OperatorWorkflow
 
@@ -101,11 +107,18 @@ def memory_create(
     store: LocalMemoryStore,
     when_useful: str,
     details: str,
-    memory_type: str | None = None,
+    memory_type: str,
     tags: list[str] | None = None,
     source: dict[str, Any] | None = None,
     project: str | None = None,
 ) -> dict[str, Any]:
+    # ``memory_type`` is mandatory for manual creation: an untyped memory is not
+    # a valid persisted state, so we reject it at the entry point rather than
+    # saving it and sweeping later.
+    if memory_type not in MEMORY_TYPES:
+        raise ValueError(
+            f"memory_type must be one of {list(MEMORY_TYPES)}, got {memory_type!r}"
+        )
     record = store.create_memory(
         MemoryCreate(
             when_useful=when_useful,

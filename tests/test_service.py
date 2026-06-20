@@ -9,7 +9,20 @@ from memory_mcp.mcp_server.service import (
 from memory_mcp.core.events import EventStore
 from memory_mcp.core.store import LocalMemoryStore
 
+import pytest
+
 from conftest import FakeEmbedder
+
+
+def test_memory_create_requires_valid_memory_type(tmp_path) -> None:
+    store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
+    with pytest.raises(ValueError, match="memory_type must be one of"):
+        memory_create(
+            store,
+            when_useful="When running tests.",
+            details="Use uv run pytest.",
+            memory_type="bogus",
+        )
 
 
 def test_mcp_service_contracts(tmp_path) -> None:
