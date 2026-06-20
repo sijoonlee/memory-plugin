@@ -56,7 +56,6 @@ def test_candidate_worker_approves_candidate_into_memory(tmp_path) -> None:
                 creation_reason="User correction in session.",
                 extra={
                     "evidence_summary": "The user corrected the test command.",
-                    "category": "durable_workflow",
                 },
             ),
         )

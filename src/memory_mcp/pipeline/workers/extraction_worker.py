@@ -128,13 +128,14 @@ class ExtractionWorker:
             # M18-3: no approval gate — extraction creates an active memory
             # directly (redacted + embedded + deduped). It is immediately
             # searchable and starts unread (is_reviewed=False) for the inbox.
-            # The extractor's situation/lesson/action/category map onto
-            # when_useful/details/tags; raw fields are kept in source.extra.
+            # The extractor's situation/lesson/action map onto when_useful/details;
+            # memory_type (M19) is the constrained type; raw fields stay in
+            # source.extra.
             self.memory_store.create_memory(
                 MemoryCreate(
                     when_useful=candidate.situation,
                     details=compose_details(candidate.lesson, candidate.action),
-                    tags=[candidate.category],
+                    memory_type=candidate.memory_type,
                     confidence=candidate.confidence,
                     project=segment.project,
                     source=MemorySource(
@@ -147,7 +148,7 @@ class ExtractionWorker:
                             "situation": candidate.situation,
                             "lesson": candidate.lesson,
                             "action": candidate.action,
-                            "category": candidate.category,
+                            "memory_type": candidate.memory_type,
                             "extractor": "llm",
                             "no_memory_reason": result.no_memory_reason,
                         },

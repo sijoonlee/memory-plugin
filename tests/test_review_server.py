@@ -16,17 +16,17 @@ from memory_mcp.review.server import create_app
 from conftest import FakeEmbedder
 
 
-def _seed_pending(root, *, when_useful: str, details: str, category: str = "testing"):
+def _seed_pending(root, *, when_useful: str, details: str, memory_type: str = "feedback"):
     store = LocalMemoryStore(root, FakeEmbedder())
     return store.create_pending(
         MemoryCreate(
             when_useful=when_useful,
             details=details,
-            tags=[category],
+            memory_type=memory_type,
             source=MemorySource(
                 kind="pipeline_candidate",
                 creation_reason="User correction.",
-                extra={"evidence_summary": "User correction.", "category": category},
+                extra={"evidence_summary": "User correction."},
             ),
         )
     )

@@ -189,7 +189,7 @@ def test_extraction_worker_creates_active_memory_from_idle_segment(tmp_path) -> 
                         situation="When running tests in this repo.",
                         lesson="Direct pytest uses the wrong environment.",
                         action="Use uv run pytest.",
-                        category="durable_workflow",
+                        memory_type="project",
                         confidence=0.8,
                         evidence_event_ids=[event.id],
                         evidence_summary="The user gave the durable test command.",
@@ -211,6 +211,8 @@ def test_extraction_worker_creates_active_memory_from_idle_segment(tmp_path) -> 
     memory = memory_store.list_memories(status="active")[0]
     assert memory.status == "active"
     assert memory.is_reviewed is False
+    # M19: the extractor's constrained memory_type round-trips onto the memory.
+    assert memory.memory_type == "project"
     assert memory.source.extra["source_session_segment_id"] == segment.id
     assert memory.source.evidence_event_ids == [event.id]
 
@@ -295,7 +297,7 @@ def test_extraction_worker_can_target_one_idle_segment(tmp_path) -> None:
                         situation="When running tests in this repo.",
                         lesson="Direct pytest uses the wrong environment.",
                         action="Use uv run pytest.",
-                        category="durable_workflow",
+                        memory_type="project",
                         confidence=0.8,
                         evidence_event_ids=[target_event.id],
                         evidence_summary="The user gave the durable test command.",
@@ -346,7 +348,7 @@ def test_extraction_worker_fails_segment_on_unknown_evidence_event(tmp_path) -> 
                         situation="When running tests in this repo.",
                         lesson="Direct pytest uses the wrong environment.",
                         action="Use uv run pytest.",
-                        category="durable_workflow",
+                        memory_type="project",
                         confidence=0.8,
                         evidence_event_ids=["evt_missing"],
                         evidence_summary="Bad evidence id.",

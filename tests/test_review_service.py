@@ -38,7 +38,7 @@ def _pending(
     *,
     when_useful: str,
     details: str,
-    category: str,
+    memory_type: str,
     confidence: float = 0.7,
     evidence: list[str] | None = None,
     project: str | None = None,
@@ -48,7 +48,7 @@ def _pending(
         MemoryCreate(
             when_useful=when_useful,
             details=details,
-            tags=[category],
+            memory_type=memory_type,
             confidence=confidence,
             project=project,
             source=MemorySource(
@@ -57,7 +57,6 @@ def _pending(
                 creation_reason="User correction.",
                 extra={
                     "evidence_summary": "A test-command correction.",
-                    "category": category,
                     **({"source_session_segment_id": segment_id} if segment_id else {}),
                 },
             ),
@@ -112,7 +111,7 @@ def test_review_service_returns_candidate_with_evidence(tmp_path) -> None:
         service,
         when_useful="When running tests.",
         details="pytest used the wrong environment. Use uv run pytest.",
-        category="testing",
+        memory_type="feedback",
         evidence=[event.id],
     )
 
@@ -139,7 +138,7 @@ def test_review_service_filters_by_project_and_confidence(tmp_path) -> None:
         service,
         when_useful="When running tests.",
         details="Use the project test runner. Use uv run pytest.",
-        category="testing",
+        memory_type="feedback",
         confidence=0.9,
         project="/repo",
         segment_id=segment.id,
@@ -148,7 +147,7 @@ def test_review_service_filters_by_project_and_confidence(tmp_path) -> None:
         service,
         when_useful="When editing docs.",
         details="Weak candidate. Do something.",
-        category="docs",
+        memory_type="reference",
         confidence=0.2,
     )
 
@@ -157,7 +156,7 @@ def test_review_service_filters_by_project_and_confidence(tmp_path) -> None:
     )
 
     assert len(candidates) == 1
-    assert "testing" in candidates[0].tags
+    assert candidates[0].memory_type == "feedback"
 
 
 def test_review_service_edits_before_approval(tmp_path) -> None:
@@ -166,7 +165,7 @@ def test_review_service_edits_before_approval(tmp_path) -> None:
         service,
         when_useful="When running tests.",
         details="pytest failed. Use pytest.",
-        category="testing",
+        memory_type="feedback",
     )
 
     memory = service.approve_candidate(

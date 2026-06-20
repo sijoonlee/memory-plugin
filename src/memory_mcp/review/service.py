@@ -18,15 +18,14 @@ from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
 
 # After M18-1 a "candidate" is a ``pending_review`` memory. The review surface
 # keeps the candidate vocabulary, but operates on ``MemoryRecord``; the
-# extractor's provenance (segment id, evidence summary, raw category) lives in
+# extractor's provenance (segment id, evidence summary) lives in
 # ``memory.source.extra``.
 
 
-def _candidate_category(memory: MemoryRecord) -> str | None:
-    category = memory.source.extra.get("category")
-    if isinstance(category, str) and category:
-        return category
-    return memory.tags[0] if memory.tags else None
+def _candidate_type(memory: MemoryRecord) -> str | None:
+    """The memory's constrained ``memory_type`` (M19) for review/filtering."""
+
+    return memory.memory_type
 
 
 def _candidate_segment_id(memory: MemoryRecord) -> str | None:
@@ -44,7 +43,7 @@ class CandidateUpdate(BaseModel):
 class CandidateFilters(BaseModel):
     status: str | None = "pending_review"
     project: str | None = None
-    category: str | None = None
+    memory_type: str | None = None
     min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     created_from: datetime | None = None
     created_to: datetime | None = None
@@ -115,12 +114,15 @@ class CandidateReviewService:
         status: str | None = "active",
         is_reviewed: bool | None = None,
         manual: bool | None = None,
+        memory_type: str | None = None,
     ) -> list[MemoryRecord]:
         """Memory-manager listing (M18-3).
 
         Filters: ``status`` (active/archived/…), ``is_reviewed`` (the read/unread
-        inbox), and ``manual`` (origin = manual ``memory_create``, derived from
-        ``source.kind``). The unread inbox is ``status='active', is_reviewed=False``.
+        inbox), ``manual`` (origin = manual ``memory_create``, derived from
+        ``source.kind``), and ``memory_type`` (M19 taxonomy:
+        user/feedback/project/reference). The unread inbox is
+        ``status='active', is_reviewed=False``.
         """
 
         memories = self.candidate_worker.memory_store.list_memories(
@@ -132,6 +134,10 @@ class CandidateReviewService:
                 memory
                 for memory in memories
                 if (memory.source.kind == "manual") == manual
+            ]
+        if memory_type is not None:
+            memories = [
+                memory for memory in memories if memory.memory_type == memory_type
             ]
         return memories
 
@@ -285,7 +291,7 @@ class CandidateReviewService:
         candidate: MemoryRecord,
         filters: CandidateFilters,
     ) -> bool:
-        if filters.category is not None and _candidate_category(candidate) != filters.category:
+        if filters.memory_type is not None and _candidate_type(candidate) != filters.memory_type:
             return False
         if (
             filters.min_confidence is not None

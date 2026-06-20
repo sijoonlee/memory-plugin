@@ -30,6 +30,11 @@ def create(
         ...,
         help="The memory body: what was learned and how to apply it.",
     ),
+    memory_type: str | None = typer.Option(
+        None,
+        "--memory-type",
+        help="Type: user | feedback | project | reference. Omit to leave untyped.",
+    ),
     tag: list[str] | None = typer.Option(None),
     project: str | None = typer.Option(
         None,
@@ -41,6 +46,7 @@ def create(
         MemoryCreate(
             when_useful=when_useful,
             details=details,
+            memory_type=memory_type,  # type: ignore[arg-type]
             tags=tag or [],
             project=project,
         )

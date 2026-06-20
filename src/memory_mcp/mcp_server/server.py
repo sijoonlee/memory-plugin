@@ -88,19 +88,23 @@ def build_mcp(
     def memory_create(
         when_useful: str,
         details: str,
+        memory_type: str | None = None,
         tags: list[str] | None = None,
         source: dict[str, Any] | None = None,
         project: str | None = None,
     ) -> dict[str, Any]:
         """Create one explicit memory. ``when_useful`` is the recall cue (when to
-        surface it); ``details`` is the body. Pass ``project`` (the repo
-        path/identifier) to scope it to that repo; omit it for a global memory
-        that surfaces in every project."""
+        surface it); ``details`` is the body. ``memory_type`` classifies it as
+        one of ``user`` (who the user is), ``feedback`` (how to work),
+        ``project`` (ongoing work/constraints), or ``reference`` (external
+        pointer). Pass ``project`` (the repo path/identifier) to scope it to that
+        repo; omit it for a global memory that surfaces in every project."""
 
         return create_memory_tool(
             memory_store,
             when_useful=when_useful,
             details=details,
+            memory_type=memory_type,
             tags=tags,
             source=source,
             project=project,

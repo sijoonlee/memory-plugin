@@ -35,7 +35,7 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
         filters = CandidateFilters(
             status=_optional_query(request, "status", default="pending_review"),
             project=_optional_query(request, "project"),
-            category=_optional_query(request, "category"),
+            memory_type=_optional_query(request, "memory_type"),
             min_confidence=_optional_float_query(request, "min_confidence"),
             created_from=_optional_query(request, "created_from"),
             created_to=_optional_query(request, "created_to"),
@@ -54,6 +54,7 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
             status=_optional_query(request, "status", default="active"),
             is_reviewed=_optional_bool_query(request, "is_reviewed"),
             manual=_optional_bool_query(request, "manual"),
+            memory_type=_optional_query(request, "memory_type"),
         )
         return _json(
             {"memories": [memory.model_dump(mode="json") for memory in memories]}

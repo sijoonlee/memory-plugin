@@ -15,7 +15,7 @@ filtersEl.addEventListener("submit", (event) => {
 });
 
 filtersEl.addEventListener("change", (event) => {
-  if (event.target.name === "status") {
+  if (event.target.name === "status" || event.target.name === "memory_type") {
     loadCandidates().catch((error) => setStatus(error.message));
   }
 });
@@ -41,7 +41,10 @@ async function loadCandidates() {
 }
 
 async function loadMemories(view = "unread") {
-  const query = MEMORY_QUERIES[view] || MEMORY_QUERIES.unread;
+  let query = MEMORY_QUERIES[view] || MEMORY_QUERIES.unread;
+  // Optional M19 type filter (the "Type" input).
+  const memoryType = (new FormData(filtersEl).get("memory_type") || "").trim();
+  if (memoryType) query += `&memory_type=${encodeURIComponent(memoryType)}`;
   state.view = view;
   setStatus("Loading memories");
   const data = await request(`/api/memories?${query}`);
@@ -51,6 +54,7 @@ async function loadMemories(view = "unread") {
     row.type = "button";
     row.className = `candidate-row ${memory.id === state.selectedId ? "active" : ""}`;
     const badges = [];
+    if (memory.memory_type) badges.push(memory.memory_type);
     if (!memory.is_reviewed) badges.push("unread");
     if (memory.source && memory.source.kind === "manual") badges.push("manual");
     const meta = `${escapeHtml(memory.status)} · score ${memory.score.toFixed(2)}${
@@ -83,6 +87,7 @@ function renderMemoryDetail(memory) {
         <h2>Memory</h2>
         ${readonlyField("When Useful", memory.when_useful)}
         ${readonlyField("Details", memory.details)}
+        ${readonlyField("Type", memory.memory_type || "—")}
         ${readonlyField("Tags", (memory.tags || []).join(", "))}
         <div class="actions">
           <button type="button" id="toggleReviewed">${memory.is_reviewed ? "Mark unread" : "Mark read"}</button>
@@ -394,12 +399,6 @@ function editorBody() {
     tags,
     confidence: Number(form.get("confidence")),
   };
-}
-
-function candidateCategory(candidate) {
-  const fromExtra = candidate.source && candidate.source.extra && candidate.source.extra.category;
-  if (fromExtra) return fromExtra;
-  return (candidate.tags && candidate.tags[0]) || "";
 }
 
 async function request(path, options = {}) {

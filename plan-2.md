@@ -202,6 +202,12 @@ immediately, but flagged in the user's inbox until checked. `is_reviewed` must b
 
 ## Milestone 19 — Improve taxonomy: `user` / `feedback` / `project` / `reference`
 
+> Status: **implemented**. Decisions taken: the freeform 5-value `category` was
+> **replaced** entirely by the 4-value `memory_type` (merge clustering re-keyed to
+> it, with a legacy fallback for pre-M19 rows); **no backfill** — pre-existing rows
+> stay untyped (`NULL`). `memory_type` is a denormalized, nullable column mirroring
+> `project`, and is surfaced in `memory_create` / `memory_search` (CLI + MCP).
+
 ### Goal
 Give each memory a constrained **type** from a fixed 4-value taxonomy. This replaces
 the extractor's current freeform 5-value `category` label (`clue_location`/…). After
