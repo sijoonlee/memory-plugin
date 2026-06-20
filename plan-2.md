@@ -430,86 +430,22 @@ path** — formation, storage, and the extractor are untouched except for M19's 
 
 ---
 
-## Milestone 22: Shared memory registry (additive, local-first)
+## Milestone 22: Shared memory registry → moved to `plan-3.md`
 
-**Reframed from "graduate local into a cloud service" (replacement) to "add an optional
-shared registry alongside the local store" (additive).** The local store stays the
-source of truth and the private working set; the shared server is a thin registry you
-optionally **push** selected memories to, and later optionally **pull** from. It is
-post-V1 and should not begin until the local MVP is stable.
+The shared-memory-registry work has grown large enough to be its own project and now
+lives in **`plan-3.md`** (git-versioned, local-first registry). The decisions taken
+since this section was written:
 
-### Privacy invariant (the whole point)
-**Private by default; local-first; sharing is explicit, per-memory, never automatic.**
-Enforced by architecture, not policy:
+- **git-versioned markdown files** replace the custom Postgres/pgvector backend — git
+  gives versioning, audit, identity, and delta sync for free (validated against Letta's
+  `memory_repo`); **no persistent server vector store** (all embedding/search stays
+  local; a reconciler embeds only ephemerally).
+- audience **small team**; **push + pull** in V1; **monorepo** layout.
+- canonical **`shared_id` / `version` / `merged_into`** identity model drives cross-user
+  dedup, history, and local refresh.
 
-- the local pipeline (`events → memory → archive/delete`) never touches the network;
-- **events never leave the machine** — only `active`, human-kept, redacted *memories*
-  are even eligible to share;
-- nothing is published except what the user explicitly selects, one action at a time;
-- a `never_share` flag can pin a memory permanently local.
-
-### Shape: thin registry, not a fat backend
-The server holds **only published memories** + author/identity + access control +
-server-side dedup. **No events, no candidates, no extraction server-side** — the
-privacy-bearing pipeline stays local-only. The local-side component is a
-`SharedMemoryClient` (push first, pull later), *not* an alternate `MemoryStore`
-(this is why [the M18-2 adapter seam](#milestone-18-2--storage-adapter-boundary-dropped)
-was dropped).
-
-```
-LOCAL (private, full pipeline)            SHARED REGISTRY (thin)
-  events ──never leaves──
-  memories (active/archived) ──push(opt-in, redacted, no local ids)──►  published memories
-       ▲                                                                 + author/identity
-       └────── pull (optional): cache as origin=shared, read-only ◄──    + access control
-  retrieval = local search over (local ∪ cached shared)                  + server-side dedup
-```
-
-### Push (first increment)
-- Explicit per-memory **publish** action over `active` memories (review UI + CLI/MCP).
-- **Mandatory redaction + a human-visible preview/diff** of exactly what bytes go up.
-- Strip local provenance: send `evidence_summary` text, **not** `evidence_event_ids` /
-  `source_session_segment_id` (they only resolve against the local `EventStore`).
-- Local marker `shared_at` / `shared_memory_id` so the UI knows what's published;
-  unshare/retract is reversible (with audit).
-- **Standardization without raw events:** server runs dedup-on-publish — a near-duplicate
-  of an existing shared memory consolidates (attaches a contributor) instead of creating
-  a fork; contributor count ranks canonical memories. (Optional steward curation.)
-
-### Pull (deferred second increment — this is where the complexity lives)
-- Subscribe to shared scopes (team/project); cache pulled memories **into the local
-  store** as `origin=shared`, **read-only**. Retrieval stays a single local search over
-  the union — offline-capable, no per-query network call.
-- **Conflict resolved at read time, not storage time** (storage keeps two non-overlapping
-  lanes: writable `origin=local`, read-only `origin=shared`, keyed by server id):
-  - *overlap / near-duplicate*: advisory only — collapse at retrieval, don't merge;
-  - *contradiction*: surface both with origin, never auto-supersede across the boundary;
-  - *staleness*: shared memories carry a `version`; refresh replaces the cached row;
-    local feedback survives (kept in `feedback_events`).
-  - **Tie-break: local wins** — personal context beats team-authoritative, so the team
-    can't silently change your agent's behavior.
-
-### Identity & access control
-- Author/owner identity on published memories; authn/authz (who can read/publish/retract).
-- Scope beyond project: per-user, per-team, explicitly-shared. Audit trail across users.
-- Server-side multi-writer correctness (concurrent publish/dedup without races).
-
-### Frontend / ops
-- A web UI for the shared registry (browse/search shared memories, contributor counts,
-  steward actions). The **local review UI stays** as the local memory manager (M18-3) —
-  it is not replaced.
-- Deployment, backups, observability, rate limiting; tenant isolation; redaction
-  (Milestone 11) becomes mandatory at the publish boundary.
-
-### Phasing
-1. **Push-only** — publish + redaction preview + server dedup-on-publish + contributor
-   count. Delivers the privacy-respecting sharing model for a fraction of the cost.
-2. **Pull + conflict-at-read** — only if local-cache retrieval over team memories is
-   wanted (browsing the registry UI may be enough). All the conflict complexity is here.
-
-Candidate-level pooling (sending un-approved candidates to a server for cross-user
-pattern mining) was considered and **set aside** in favor of this memory-level, opt-in
-model — it keeps events *and* un-vetted candidates local.
+The privacy invariant, two-lane (`origin=local` / `origin=shared`) cache, local-wins
+conflict rule, and per-memory opt-in publishing all carry forward into `plan-3.md`.
 
 ---
 
@@ -517,6 +453,14 @@ model — it keeps events *and* un-vetted candidates local.
 
 (Logically part of the M18 extraction family; parked at the bottom because it is
 optional polish, not on the critical path.)
+
+> **Terminology — `Event → Segment → Chunk`.** An **event** is the atomic captured
+> unit (one message / tool call). A **segment** groups events into one coherent session
+> (the persisted extraction unit). A **chunk** is a *prompt-sized slice of a segment's
+> events* — it exists only when a segment is too big for one model call, and is never
+> stored (ephemeral, extraction-time only). So a chunk is a **piece of a segment**, not
+> a piece of an event. (Payload truncation — capping one event at `_MAX_EVENT_PAYLOAD_CHARS`
+> — is the separate "piece of an event" concept.)
 
 ### Goal
 Extract from a segment that is too large for one model call **without losing data**.
