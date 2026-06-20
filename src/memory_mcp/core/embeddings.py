@@ -11,6 +11,18 @@ class Embedder(Protocol):
         ...
 
 
+class NoopEmbedder:
+    """An embedder for read paths that never embed (e.g. the catalog, which only
+    reads SQLite). Avoids loading the heavy embedding model; raises if anything
+    unexpectedly tries to embed."""
+
+    def embed_text(self, text: str) -> list[float]:
+        raise RuntimeError("NoopEmbedder cannot embed text")
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        raise RuntimeError("NoopEmbedder cannot embed text")
+
+
 class LangChainHuggingFaceEmbedder:
     def __init__(
         self,

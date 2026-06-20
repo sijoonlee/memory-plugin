@@ -1,5 +1,15 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv --directory \"${CLAUDE_PLUGIN_ROOT}\" run memory-mcp-event catalog --root \"${CLAUDE_PLUGIN_ROOT}/.memory-mcp\" --adapter claude"
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [

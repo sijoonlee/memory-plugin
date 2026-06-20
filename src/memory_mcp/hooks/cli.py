@@ -9,7 +9,15 @@ from typing import Any
 import typer
 
 from memory_mcp.adapters import ADAPTER_NAMES, GenericAdapter, get_adapter
+from memory_mcp.catalog import (
+    CATALOG_DEFAULT_LIMIT,
+    CATALOG_DEFAULT_MAX_WORDS,
+    render_catalog,
+)
+from memory_mcp.core.embeddings import NoopEmbedder
 from memory_mcp.core.events import EventStore
+from memory_mcp.core.projects import resolve_project
+from memory_mcp.core.store import LocalMemoryStore
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -61,6 +69,57 @@ def append(
     )
     if not quiet:
         typer.echo(event.model_dump_json(indent=2))
+
+
+@app.command()
+def catalog(
+    adapter: str | None = typer.Option(
+        None,
+        help=f"Agent adapter to read the project from the payload: one of {ADAPTER_NAMES}.",
+    ),
+    project: str | None = typer.Option(
+        None, help="Override the project; otherwise derived from the payload cwd."
+    ),
+    limit: int = typer.Option(CATALOG_DEFAULT_LIMIT, help="Max memories (top by score)."),
+    max_words: int = typer.Option(
+        CATALOG_DEFAULT_MAX_WORDS, "--max-words", help="Soft word budget."
+    ),
+    root: Path = typer.Option(Path(".memory-mcp"), help="Memory MCP store root."),
+) -> None:
+    """Print the scoped memory catalog for a SessionStart hook to inject.
+
+    Reads the hook payload on stdin to learn the session's ``cwd``, normalizes it
+    to the project boundary, and writes the catalog block to stdout (stdout *is*
+    the injected context, so this is never ``--quiet``). Prints nothing for an
+    empty store. Reads only SQLite — no embedding model is loaded, so it stays
+    fast enough for session startup.
+    """
+
+    # Mirror ``append``: no-op inside the extractor's own agent run so its
+    # SessionStart doesn't get (and re-ingest) the catalog.
+    if os.environ.get("MEMORY_MCP_DISABLE_CAPTURE") == "1":
+        return
+
+    payload = _read_payload(None)
+    raw_project = project
+    if raw_project is None and adapter is not None:
+        try:
+            raw_project = get_adapter(adapter).extract_project(payload)
+        except ValueError:
+            raw_project = None
+    if raw_project is None:
+        cwd = payload.get("cwd")
+        raw_project = cwd if isinstance(cwd, str) and cwd.strip() else os.getcwd()
+
+    store = LocalMemoryStore(root, NoopEmbedder())
+    block = render_catalog(
+        store,
+        project=resolve_project(raw_project),
+        limit=limit,
+        max_words=max_words,
+    )
+    if block:
+        typer.echo(block)
 
 
 @app.command()

@@ -24,6 +24,7 @@ def test_mcp_server_exposes_tools(tmp_path) -> None:
         tools = await mcp.list_tools()
         assert [tool.name for tool in tools] == [
             "memory_search",
+            "memory_catalog",
             "memory_get",
             "memory_create",
             "memory_delete",
