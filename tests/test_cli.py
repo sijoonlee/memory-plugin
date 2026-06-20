@@ -20,7 +20,7 @@ class FakeStore:
         )
 
 
-def test_create_uses_situation_lesson_action_flags(monkeypatch, tmp_path) -> None:
+def test_create_uses_when_useful_details_flags(monkeypatch, tmp_path) -> None:
     captured = {}
 
     def fake_store(root):
@@ -41,12 +41,10 @@ def test_create_uses_situation_lesson_action_flags(monkeypatch, tmp_path) -> Non
         cli.app,
         [
             "create",
-            "--situation",
+            "--when-useful",
             "When running tests in this repo.",
-            "--lesson",
-            "Direct pytest used the wrong environment.",
-            "--action",
-            "Use uv run pytest.",
+            "--details",
+            "Direct pytest used the wrong environment. Use uv run pytest.",
             "--tag",
             "testing",
             "--root",
@@ -56,8 +54,9 @@ def test_create_uses_situation_lesson_action_flags(monkeypatch, tmp_path) -> Non
 
     assert result.exit_code == 0
     assert captured["memory"].when_useful == "When running tests in this repo."
-    assert captured["memory"].what_happened == "Direct pytest used the wrong environment."
-    assert captured["memory"].helpful_explanation == "Use uv run pytest."
+    assert captured["memory"].details == (
+        "Direct pytest used the wrong environment. Use uv run pytest."
+    )
     assert captured["memory"].tags == ["testing"]
 
 

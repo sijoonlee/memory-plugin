@@ -9,9 +9,8 @@ from memory_mcp.operator import OperatorWorkflow
 
 _MEMORY_SUMMARY_FIELDS = (
     "id",
-    "what_happened",
     "when_useful",
-    "helpful_explanation",
+    "details",
     "tags",
     "project",
     "status",
@@ -47,9 +46,8 @@ def memory_search(
         "memories": [
             {
                 "id": result.memory.id,
-                "what_happened": result.memory.what_happened,
                 "when_useful": result.memory.when_useful,
-                "helpful_explanation": result.memory.helpful_explanation,
+                "details": result.memory.details,
                 "tags": result.memory.tags,
                 "score": result.memory.score,
                 "confidence": result.memory.confidence,
@@ -99,18 +97,16 @@ def memory_get(store: LocalMemoryStore, memory_id: str) -> dict[str, Any]:
 
 def memory_create(
     store: LocalMemoryStore,
-    what_happened: str,
     when_useful: str,
-    helpful_explanation: str,
+    details: str,
     tags: list[str] | None = None,
     source: dict[str, Any] | None = None,
     project: str | None = None,
 ) -> dict[str, Any]:
     record = store.create_memory(
         MemoryCreate(
-            what_happened=what_happened,
             when_useful=when_useful,
-            helpful_explanation=helpful_explanation,
+            details=details,
             tags=tags or [],
             source=MemorySource.model_validate(source or {"kind": "manual"}),
             project=project,
@@ -198,13 +194,13 @@ def memory_list(
 
 
 def candidate_list(
-    event_store: EventStore,
+    store: LocalMemoryStore,
     status: str = "pending_review",
     limit: int = 20,
 ) -> dict[str, Any]:
-    """List pipeline-proposed memory candidates of a given status."""
+    """List pipeline-proposed memory candidates (pending_review memories)."""
 
-    records = event_store.list_memory_candidates(status=status)
+    records = store.list_memories(status=status)
     return {
         "status": status,
         "total": len(records),

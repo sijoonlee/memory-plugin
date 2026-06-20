@@ -5,11 +5,10 @@ from datetime import datetime, timezone
 from memory_mcp.core.events import (
     EventCreate,
     EventStore,
-    MemoryCandidateCreate,
     SessionSegmentRecord,
 )
 import pytest
-from memory_mcp.core.models import MemoryCreate
+from memory_mcp.core.models import MemoryCreate, MemorySource
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
 from memory_mcp.review.service import (
@@ -34,13 +33,44 @@ def _service(tmp_path) -> CandidateReviewService:
     )
 
 
+def _pending(
+    service: CandidateReviewService,
+    *,
+    when_useful: str,
+    details: str,
+    category: str,
+    confidence: float = 0.7,
+    evidence: list[str] | None = None,
+    project: str | None = None,
+    segment_id: str | None = None,
+):
+    return service.candidate_worker.create_candidate(
+        MemoryCreate(
+            when_useful=when_useful,
+            details=details,
+            tags=[category],
+            confidence=confidence,
+            project=project,
+            source=MemorySource(
+                kind="pipeline_candidate",
+                evidence_event_ids=evidence or [],
+                creation_reason="User correction.",
+                extra={
+                    "evidence_summary": "A test-command correction.",
+                    "category": category,
+                    **({"source_session_segment_id": segment_id} if segment_id else {}),
+                },
+            ),
+        )
+    )
+
+
 def test_review_service_lists_active_memories_readonly(tmp_path) -> None:
     service = _service(tmp_path)
     record = service.candidate_worker.memory_store.create_memory(
         MemoryCreate(
-            what_happened="pytest used the wrong environment.",
             when_useful="When running tests in this repo.",
-            helpful_explanation="Use uv run pytest.",
+            details="pytest used the wrong environment. Use uv run pytest.",
             tags=["testing"],
         )
     )
@@ -51,7 +81,7 @@ def test_review_service_lists_active_memories_readonly(tmp_path) -> None:
 
     detail = service.get_memory_detail(record.id)
     assert detail.id == record.id
-    assert detail.what_happened == "pytest used the wrong environment."
+    assert detail.details.startswith("pytest used the wrong environment.")
 
     # The review service exposes no mutation path for active memories.
     assert not hasattr(service, "update_memory")
@@ -78,16 +108,12 @@ def test_review_service_returns_candidate_with_evidence(tmp_path) -> None:
             payload={"message": "pytest failed"},
         )
     )
-    candidate = service.event_store.create_memory_candidate(
-        MemoryCandidateCreate(
-            situation="When running tests.",
-            lesson="pytest used the wrong environment.",
-            action="Use uv run pytest.",
-            category="testing",
-            evidence_event_ids=[event.id],
-            evidence_summary="The command failed in the wrong environment.",
-            creation_reason="User correction.",
-        )
+    candidate = _pending(
+        service,
+        when_useful="When running tests.",
+        details="pytest used the wrong environment. Use uv run pytest.",
+        category="testing",
+        evidence=[event.id],
     )
 
     detail = service.get_candidate_detail(candidate.id)
@@ -109,28 +135,21 @@ def test_review_service_filters_by_project_and_confidence(tmp_path) -> None:
         status="idle",
     )
     service.event_store.upsert_session_segment(segment)
-    service.event_store.create_memory_candidate(
-        MemoryCandidateCreate(
-            situation="When running tests.",
-            lesson="Use the project test runner.",
-            action="Use uv run pytest.",
-            category="testing",
-            confidence=0.9,
-            evidence_summary="User correction.",
-            creation_reason="User correction.",
-            source_session_segment_id=segment.id,
-        )
+    _pending(
+        service,
+        when_useful="When running tests.",
+        details="Use the project test runner. Use uv run pytest.",
+        category="testing",
+        confidence=0.9,
+        project="/repo",
+        segment_id=segment.id,
     )
-    service.event_store.create_memory_candidate(
-        MemoryCandidateCreate(
-            situation="When editing docs.",
-            lesson="Weak candidate.",
-            action="Do something.",
-            category="docs",
-            confidence=0.2,
-            evidence_summary="Weak signal.",
-            creation_reason="Weak signal.",
-        )
+    _pending(
+        service,
+        when_useful="When editing docs.",
+        details="Weak candidate. Do something.",
+        category="docs",
+        confidence=0.2,
     )
 
     candidates = service.list_candidates(
@@ -138,34 +157,29 @@ def test_review_service_filters_by_project_and_confidence(tmp_path) -> None:
     )
 
     assert len(candidates) == 1
-    assert candidates[0].category == "testing"
+    assert "testing" in candidates[0].tags
 
 
 def test_review_service_edits_before_approval(tmp_path) -> None:
     service = _service(tmp_path)
-    candidate = service.event_store.create_memory_candidate(
-        MemoryCandidateCreate(
-            situation="When running tests.",
-            lesson="pytest failed.",
-            action="Use pytest.",
-            category="testing",
-            evidence_summary="Initial candidate.",
-            creation_reason="Initial candidate.",
-        )
+    candidate = _pending(
+        service,
+        when_useful="When running tests.",
+        details="pytest failed. Use pytest.",
+        category="testing",
     )
 
-    updated, memory = service.approve_candidate(
+    memory = service.approve_candidate(
         candidate.id,
         update=CandidateUpdate(
-            lesson="Direct pytest used the wrong environment.",
-            action="Use uv run pytest.",
+            when_useful="When running tests.",
+            details="Direct pytest used the wrong environment. Use uv run pytest.",
             confidence=0.85,
         ),
     )
 
-    assert updated.status == "approved"
-    assert memory.what_happened == "Direct pytest used the wrong environment."
-    assert memory.helpful_explanation == "Use uv run pytest."
+    assert memory.status == "active"
+    assert memory.details == "Direct pytest used the wrong environment. Use uv run pytest."
     assert memory.confidence == 0.85
 
 

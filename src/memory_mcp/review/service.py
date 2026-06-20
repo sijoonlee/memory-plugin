@@ -10,25 +10,35 @@ from memory_mcp.core.embeddings import LangChainHuggingFaceEmbedder
 from memory_mcp.core.events import (
     EventRecord,
     EventStore,
-    MemoryCandidateCreate,
-    MemoryCandidateRecord,
     SessionSegmentRecord,
 )
-from memory_mcp.core.models import MemoryRecord
+from memory_mcp.core.models import MemoryCreate, MemoryRecord
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
 
+# After M18-1 a "candidate" is a ``pending_review`` memory. The review surface
+# keeps the candidate vocabulary, but operates on ``MemoryRecord``; the
+# extractor's provenance (segment id, evidence summary, raw category) lives in
+# ``memory.source.extra``.
+
+
+def _candidate_category(memory: MemoryRecord) -> str | None:
+    category = memory.source.extra.get("category")
+    if isinstance(category, str) and category:
+        return category
+    return memory.tags[0] if memory.tags else None
+
+
+def _candidate_segment_id(memory: MemoryRecord) -> str | None:
+    segment_id = memory.source.extra.get("source_session_segment_id")
+    return segment_id if isinstance(segment_id, str) else None
+
 
 class CandidateUpdate(BaseModel):
-    situation: str | None = None
-    lesson: str | None = None
-    action: str | None = None
-    category: str | None = None
+    when_useful: str | None = None
+    details: str | None = None
+    tags: list[str] | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    creation_reason: str | None = None
-    evidence_event_ids: list[str] | None = None
-    evidence_summary: str | None = None
-    metadata: dict[str, Any] | None = None
 
 
 class CandidateFilters(BaseModel):
@@ -41,7 +51,7 @@ class CandidateFilters(BaseModel):
 
 
 class CandidateDetail(BaseModel):
-    candidate: MemoryCandidateRecord
+    candidate: MemoryRecord
     source_segment: SessionSegmentRecord | None = None
     evidence_events: list[EventRecord]
     segment_events: list[EventRecord] = Field(default_factory=list)
@@ -81,9 +91,9 @@ class CandidateReviewService:
         self,
         *,
         filters: CandidateFilters | None = None,
-    ) -> list[MemoryCandidateRecord]:
+    ) -> list[MemoryRecord]:
         filters = filters or CandidateFilters()
-        candidates = self.event_store.list_memory_candidates(status=filters.status)
+        candidates = self.candidate_worker.list_candidates(status=filters.status)
         return [
             candidate
             for candidate in candidates
@@ -121,7 +131,9 @@ class CandidateReviewService:
         return CandidateDetail(
             candidate=candidate,
             source_segment=source_segment,
-            evidence_events=self.event_store.list_events_by_ids(candidate.evidence_event_ids),
+            evidence_events=self.event_store.list_events_by_ids(
+                candidate.source.evidence_event_ids
+            ),
             segment_events=segment_events,
         )
 
@@ -129,7 +141,7 @@ class CandidateReviewService:
         self,
         candidate_id: str,
         update: CandidateUpdate,
-    ) -> MemoryCandidateRecord:
+    ) -> MemoryRecord:
         return self.candidate_worker.update_candidate(
             candidate_id,
             **update.model_dump(exclude_unset=True),
@@ -140,19 +152,19 @@ class CandidateReviewService:
         candidate_id: str,
         *,
         update: CandidateUpdate | None = None,
-    ) -> tuple[MemoryCandidateRecord, MemoryRecord]:
+    ) -> MemoryRecord:
         if update is not None and update.model_fields_set:
             self.update_candidate(candidate_id, update)
         return self.candidate_worker.approve_candidate(candidate_id)
 
-    def reject_candidate(self, candidate_id: str, *, reason: str) -> MemoryCandidateRecord:
+    def reject_candidate(self, candidate_id: str, *, reason: str) -> MemoryRecord:
         return self.candidate_worker.reject_candidate(candidate_id, reason=reason)
 
     def merge_candidates(
         self,
         source_ids: list[str],
-        merged: MemoryCandidateCreate,
-    ) -> MemoryCandidateRecord:
+        merged: MemoryCreate,
+    ) -> MemoryRecord:
         """Merge pending candidates into one new editable pending candidate.
 
         Human-driven: the new candidate still requires approval, which runs the
@@ -161,7 +173,7 @@ class CandidateReviewService:
 
         return self.candidate_worker.merge_candidates(source_ids, merged)
 
-    def archive_candidate(self, candidate_id: str) -> MemoryCandidateRecord:
+    def archive_candidate(self, candidate_id: str) -> MemoryRecord:
         return self.candidate_worker.archive_candidate(candidate_id)
 
     def list_segments(
@@ -206,26 +218,27 @@ class CandidateReviewService:
             raise ValueError(f"session segment not found after retry: {segment_id}")
         return retried
 
-    def _require_candidate(self, candidate_id: str) -> MemoryCandidateRecord:
-        candidate = self.event_store.get_memory_candidate(candidate_id)
+    def _require_candidate(self, candidate_id: str) -> MemoryRecord:
+        candidate = self.candidate_worker.get_candidate(candidate_id)
         if candidate is None:
             raise ValueError(f"candidate not found: {candidate_id}")
         return candidate
 
     def _source_segment(
         self,
-        candidate: MemoryCandidateRecord,
+        candidate: MemoryRecord,
     ) -> SessionSegmentRecord | None:
-        if candidate.source_session_segment_id is None:
+        segment_id = _candidate_segment_id(candidate)
+        if segment_id is None:
             return None
-        return self.event_store.get_session_segment(candidate.source_session_segment_id)
+        return self.event_store.get_session_segment(segment_id)
 
     def _matches_filters(
         self,
-        candidate: MemoryCandidateRecord,
+        candidate: MemoryRecord,
         filters: CandidateFilters,
     ) -> bool:
-        if filters.category is not None and candidate.category != filters.category:
+        if filters.category is not None and _candidate_category(candidate) != filters.category:
             return False
         if (
             filters.min_confidence is not None
@@ -236,8 +249,6 @@ class CandidateReviewService:
             return False
         if filters.created_to is not None and candidate.created_at > filters.created_to:
             return False
-        if filters.project is not None:
-            segment = self._source_segment(candidate)
-            if segment is None or segment.project != filters.project:
-                return False
+        if filters.project is not None and candidate.project != filters.project:
+            return False
         return True

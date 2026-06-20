@@ -81,18 +81,17 @@ def test_create_memory_redacts_fields(tmp_path) -> None:
     store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
     record = store.create_memory(
         MemoryCreate(
-            what_happened="leaked sk-ABCDEF0123456789ghij in logs",
             when_useful="When deploying.",
-            helpful_explanation=f"rotate this:\n{PRIVATE_KEY}",
+            details=f"leaked sk-ABCDEF0123456789ghij in logs; rotate this:\n{PRIVATE_KEY}",
             tags=["password=hunter2"],
         )
     )
 
-    assert "sk-ABCDEF0123456789ghij" not in record.what_happened
-    assert "PRIVATE KEY" not in record.helpful_explanation
+    assert "sk-ABCDEF0123456789ghij" not in record.details
+    assert "PRIVATE KEY" not in record.details
     assert "hunter2" not in record.tags[0]
 
     loaded = store.get_memory(record.id)
     assert loaded is not None
-    assert "sk-ABCDEF0123456789ghij" not in loaded.what_happened
+    assert "sk-ABCDEF0123456789ghij" not in loaded.details
     assert "sk-ABCDEF0123456789ghij" not in loaded.content_for_embedding

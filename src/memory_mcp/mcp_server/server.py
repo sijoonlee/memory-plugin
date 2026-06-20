@@ -86,22 +86,21 @@ def build_mcp(
 
     @mcp.tool()
     def memory_create(
-        what_happened: str,
         when_useful: str,
-        helpful_explanation: str,
+        details: str,
         tags: list[str] | None = None,
         source: dict[str, Any] | None = None,
         project: str | None = None,
     ) -> dict[str, Any]:
-        """Create one explicit memory. Pass ``project`` (the repo
+        """Create one explicit memory. ``when_useful`` is the recall cue (when to
+        surface it); ``details`` is the body. Pass ``project`` (the repo
         path/identifier) to scope it to that repo; omit it for a global memory
         that surfaces in every project."""
 
         return create_memory_tool(
             memory_store,
-            what_happened=what_happened,
             when_useful=when_useful,
-            helpful_explanation=helpful_explanation,
+            details=details,
             tags=tags,
             source=source,
             project=project,
@@ -165,10 +164,11 @@ def build_mcp(
         status: str = "pending_review", limit: int = 20
     ) -> dict[str, Any]:
         """List pipeline-proposed memory candidates by status (pending_review,
-        approved, rejected, merged). Read-only. Approving or rejecting
-        candidates happens in the review workflow, not here."""
+        rejected, merged, archived). A candidate is a pending_review memory;
+        approving it activates the memory. Read-only here — approving or
+        rejecting happens in the review workflow."""
 
-        return candidate_list_tool(events, status=status, limit=limit)
+        return candidate_list_tool(memory_store, status=status, limit=limit)
 
     return mcp
 

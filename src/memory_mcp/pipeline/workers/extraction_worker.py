@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from memory_mcp.core.events import EventRecord, EventStore, MemoryCandidateCreate, SessionSegmentRecord
-from memory_mcp.pipeline.extractors import ExtractionResult, MemoryExtractor
+from memory_mcp.core.events import EventRecord, EventStore, SessionSegmentRecord
+from memory_mcp.core.models import MemoryCreate, MemorySource
+from memory_mcp.core.store import LocalMemoryStore
+from memory_mcp.pipeline.extractors import (
+    ExtractionResult,
+    MemoryExtractor,
+    compose_details,
+)
 
 
 @dataclass(frozen=True)
@@ -31,9 +37,11 @@ class ExtractionWorker:
         self,
         *,
         event_store: EventStore,
+        memory_store: LocalMemoryStore,
         extractor: MemoryExtractor,
     ) -> None:
         self.event_store = event_store
+        self.memory_store = memory_store
         self.extractor = extractor
 
     def run_once(
@@ -117,18 +125,31 @@ class ExtractionWorker:
                     "candidate referenced evidence events outside the segment: "
                     + ", ".join(sorted(unknown_ids))
                 )
-            self.event_store.create_memory_candidate(
-                MemoryCandidateCreate(
-                    situation=candidate.situation,
-                    lesson=candidate.lesson,
-                    action=candidate.action,
-                    category=candidate.category,
+            # One unified model: the extractor's situation/lesson/action/category
+            # map onto when_useful/details/tags; the raw fields are preserved in
+            # source.extra for review display + provenance.
+            self.memory_store.create_pending(
+                MemoryCreate(
+                    when_useful=candidate.situation,
+                    details=compose_details(candidate.lesson, candidate.action),
+                    tags=[candidate.category],
                     confidence=candidate.confidence,
-                    creation_reason="Extracted from idle session segment by LLM.",
-                    evidence_event_ids=candidate.evidence_event_ids,
-                    evidence_summary=candidate.evidence_summary,
-                    source_session_segment_id=segment.id,
-                    metadata={"extractor": "llm", "no_memory_reason": result.no_memory_reason},
+                    project=segment.project,
+                    source=MemorySource(
+                        kind="pipeline_candidate",
+                        evidence_event_ids=candidate.evidence_event_ids,
+                        creation_reason="Extracted from idle session segment by LLM.",
+                        extra={
+                            "source_session_segment_id": segment.id,
+                            "evidence_summary": candidate.evidence_summary,
+                            "situation": candidate.situation,
+                            "lesson": candidate.lesson,
+                            "action": candidate.action,
+                            "category": candidate.category,
+                            "extractor": "llm",
+                            "no_memory_reason": result.no_memory_reason,
+                        },
+                    ),
                 )
             )
             count += 1

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from memory_mcp.core.events import EventStore, MemoryCandidateCreate
+from memory_mcp.core.events import EventStore
+from memory_mcp.core.models import MemoryCreate, MemorySource
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.pipeline.extractors import MergeProposalResult, StaticMergeProposer
 from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
@@ -26,16 +27,21 @@ def _worker(tmp_path, proposer) -> tuple[MergeProposalWorker, CandidateWorker, L
 
 def _seed(worker: CandidateWorker, *, lesson: str, action: str, category: str, evidence: list[str]) -> str:
     record = worker.create_candidate(
-        MemoryCandidateCreate(
-            situation="When running tests in this repo.",
-            lesson=lesson,
-            action=action,
-            category=category,
+        MemoryCreate(
+            when_useful="When running tests in this repo.",
+            details=f"{lesson} {action}",
+            tags=[category],
             confidence=0.7,
-            creation_reason="Extracted from idle session segment by LLM.",
-            evidence_event_ids=evidence,
-            evidence_summary="A test-command correction.",
-            source_session_segment_id=f"seg_{evidence[0]}",
+            source=MemorySource(
+                kind="pipeline_candidate",
+                evidence_event_ids=evidence,
+                creation_reason="Extracted from idle session segment by LLM.",
+                extra={
+                    "source_session_segment_id": f"seg_{evidence[0]}",
+                    "evidence_summary": "A test-command correction.",
+                    "category": category,
+                },
+            ),
         )
     )
     return record.id
@@ -69,9 +75,9 @@ def test_agent_merges_cluster_into_pending_candidate_without_active_memory(tmp_p
     pending = candidates.list_candidates(status="pending_review")
     assert len(pending) == 1
     merged = pending[0]
-    assert merged.lesson == "Run tests through the project environment."
-    assert merged.metadata["merged_from"]["source_candidate_ids"] == [a, b]
-    assert merged.metadata["merge_proposal_reason"]
+    assert merged.details.startswith("Run tests through the project environment.")
+    assert merged.source.extra["merged_from"]["source_candidate_ids"] == [a, b]
+    assert merged.source.extra["merge_proposal_reason"]
 
     # Sources are marked merged (reversible), not approved.
     assert candidates.get_candidate(a).status == "merged"

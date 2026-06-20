@@ -36,9 +36,8 @@ class LocalMemoryStore:
     def create_memory(self, memory: MemoryCreate) -> MemoryRecord:
         memory = _redact_memory_create(memory)
         content_for_embedding = build_content_for_embedding(
-            what_happened=memory.what_happened,
             when_useful=memory.when_useful,
-            helpful_explanation=memory.helpful_explanation,
+            details=memory.details,
             tags=memory.tags,
         )
         vector = self.embedder.embed_text(content_for_embedding)
@@ -68,6 +67,104 @@ class LocalMemoryStore:
         self._insert_memory_record(record)
         self._add_vector(record, vector)
         return record
+
+    def create_pending(self, memory: MemoryCreate) -> MemoryRecord:
+        """Store a ``pending_review`` memory without embedding or dedupe.
+
+        Pending memories (formerly "candidates") are not searchable and carry no
+        vector; the embedding + dedupe-on-create gate runs later in ``activate``.
+        """
+
+        memory = _redact_memory_create(memory)
+        content_for_embedding = build_content_for_embedding(
+            when_useful=memory.when_useful,
+            details=memory.details,
+            tags=memory.tags,
+        )
+        record = MemoryRecord(
+            id=f"mem_{uuid.uuid4().hex}",
+            content_for_embedding=content_for_embedding,
+            status="pending_review",
+            **memory.model_dump(),
+        )
+        self._insert_memory_record(record)
+        return record
+
+    def activate(self, memory_id: str) -> MemoryRecord | None:
+        """Promote a ``pending_review`` memory to ``active``, embedding + deduping.
+
+        Mirrors ``create_memory``'s gate, but in place on the existing pending row:
+        a clear duplicate marks the pending memory ``merged`` (folding tags/score
+        into the existing active memory); a possible duplicate marks it
+        ``rejected``; otherwise it becomes ``active`` and gains its vector.
+        """
+
+        record = self.get_memory(memory_id)
+        if record is None:
+            return None
+        if record.status != "pending_review":
+            raise ValueError(
+                f"memory is not pending_review: {memory_id} ({record.status})"
+            )
+
+        vector = self.embedder.embed_text(record.content_for_embedding)
+        dedupe_match = self._find_dedupe_match(record, vector)
+        if dedupe_match is not None:
+            matched_record, decision, similarity = dedupe_match
+            if decision == "duplicate":
+                self._merge_duplicate_memory(
+                    existing=matched_record,
+                    candidate=record,
+                    similarity=similarity,
+                )
+                return self._settle_pending(
+                    record,
+                    status="merged",
+                    dedupe={
+                        "decision": "merged_duplicate",
+                        "merged_into_memory_id": matched_record.id,
+                        "similarity": similarity,
+                    },
+                )
+            if decision == "possible_duplicate":
+                return self._settle_pending(
+                    record,
+                    status="rejected",
+                    dedupe={
+                        "decision": "possible_duplicate_rejected",
+                        "existing_memory_id": matched_record.id,
+                        "similarity": similarity,
+                        "reason": "Candidate is similar to an existing active memory.",
+                    },
+                )
+
+        activated = record.model_copy(
+            update={"status": "active", "updated_at": datetime.now(timezone.utc)}
+        )
+        self.update_memory(activated)
+        self._add_vector(activated, vector)
+        return activated
+
+    def _settle_pending(
+        self,
+        record: MemoryRecord,
+        *,
+        status: str,
+        dedupe: dict[str, Any],
+    ) -> MemoryRecord:
+        """Mark a pending memory terminal (``merged`` / ``rejected``), no vector."""
+
+        source = record.source.model_copy(deep=True)
+        source.extra["dedupe"] = dedupe
+        settled = record.model_copy(
+            update={
+                "status": status,
+                "source": source,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        self.update_memory(settled)
+        return settled
 
     def get_memory(self, memory_id: str) -> MemoryRecord | None:
         with self._connect_sqlite() as conn:
@@ -419,9 +516,8 @@ class LocalMemoryStore:
         dedupe["duplicate_count"] = int(dedupe.get("duplicate_count", 0)) + 1
         dedupe["last_similarity"] = similarity
         dedupe["last_candidate"] = {
-            "what_happened": candidate.what_happened,
             "when_useful": candidate.when_useful,
-            "helpful_explanation": candidate.helpful_explanation,
+            "details": candidate.details,
             "tags": candidate.tags,
             "source": candidate.source.model_dump(mode="json"),
         }
@@ -529,9 +625,8 @@ class LocalMemoryStore:
 def _redact_memory_create(memory: MemoryCreate) -> MemoryCreate:
     return memory.model_copy(
         update={
-            "what_happened": redact_text(memory.what_happened),
             "when_useful": redact_text(memory.when_useful),
-            "helpful_explanation": redact_text(memory.helpful_explanation),
+            "details": redact_text(memory.details),
             "tags": [redact_text(tag) for tag in memory.tags],
         }
     )
@@ -581,28 +676,13 @@ def _clamp_score(score: float) -> float:
 
 
 def _dedupe_field_match(candidate: MemoryCreate, existing: MemoryRecord) -> str:
-    lesson_similarity = _token_jaccard(
-        candidate.what_happened,
-        existing.what_happened,
-    )
-    situation_similarity = _token_jaccard(candidate.when_useful, existing.when_useful)
-    action_similarity = _token_jaccard(
-        candidate.helpful_explanation,
-        existing.helpful_explanation,
-    )
+    when_similarity = _token_jaccard(candidate.when_useful, existing.when_useful)
+    details_similarity = _token_jaccard(candidate.details, existing.details)
     tag_overlap = bool(set(candidate.tags).intersection(existing.tags))
 
-    if (
-        lesson_similarity >= 0.70
-        and situation_similarity >= 0.80
-        and action_similarity >= 0.80
-    ):
+    if when_similarity >= 0.80 and details_similarity >= 0.70:
         return "duplicate"
-    if (
-        lesson_similarity >= 0.35
-        and situation_similarity >= 0.60
-        and (action_similarity >= 0.60 or tag_overlap)
-    ):
+    if when_similarity >= 0.60 and (details_similarity >= 0.45 or tag_overlap):
         return "possible_duplicate"
     return "distinct"
 

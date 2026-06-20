@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from memory_mcp.core.events import EventStore, MemoryCandidateCreate
+from memory_mcp.core.events import EventStore
+from memory_mcp.core.models import MemoryCreate, MemorySource
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
 
@@ -24,30 +25,40 @@ def _candidate(
     segment: str,
 ) -> str:
     record = worker.create_candidate(
-        MemoryCandidateCreate(
-            situation="When running tests in this repo.",
-            lesson=lesson,
-            action="Use uv run pytest.",
-            category="durable_workflow",
+        MemoryCreate(
+            when_useful="When running tests in this repo.",
+            details=f"{lesson} Use uv run pytest.",
+            tags=["durable_workflow"],
             confidence=0.7,
-            creation_reason="User correction in session.",
-            evidence_event_ids=evidence,
-            evidence_summary="The user corrected the test command.",
-            source_session_segment_id=segment,
+            source=MemorySource(
+                kind="pipeline_candidate",
+                evidence_event_ids=evidence,
+                creation_reason="User correction in session.",
+                extra={
+                    "source_session_segment_id": segment,
+                    "evidence_summary": "The user corrected the test command.",
+                    "category": "durable_workflow",
+                },
+            ),
         )
     )
     return record.id
 
 
-def _merged_content() -> MemoryCandidateCreate:
-    return MemoryCandidateCreate(
-        situation="When running tests in this repo.",
-        lesson="Run tests through the project environment.",
-        action="Use uv run pytest so dependencies resolve.",
-        category="durable_workflow",
+def _merged_content() -> MemoryCreate:
+    return MemoryCreate(
+        when_useful="When running tests in this repo.",
+        details="Run tests through the project environment. Use uv run pytest so dependencies resolve.",
+        tags=["durable_workflow"],
         confidence=0.8,
-        creation_reason="Merged from repeated test-command corrections.",
-        evidence_summary="The user corrected the test command across sessions.",
+        source=MemorySource(
+            kind="pipeline_merge",
+            creation_reason="Merged from repeated test-command corrections.",
+            extra={
+                "evidence_summary": "The user corrected the test command across sessions.",
+                "category": "durable_workflow",
+            },
+        ),
     )
 
 
@@ -61,18 +72,18 @@ def test_merge_preserves_provenance_and_marks_sources(tmp_path) -> None:
     # New candidate is pending_review and still editable.
     assert merged.status == "pending_review"
     # Union of evidence event ids across sources.
-    assert merged.evidence_event_ids == ["evt_1", "evt_2", "evt_3"]
-    # Source provenance lands in metadata.
-    assert merged.metadata["merged_from"]["source_candidate_ids"] == [a, b]
-    assert merged.metadata["merged_from"]["source_session_segment_ids"] == ["seg_a", "seg_b"]
-    assert merged.source_session_segment_id is None
+    assert merged.source.evidence_event_ids == ["evt_1", "evt_2", "evt_3"]
+    # Source provenance lands in source.extra.
+    assert merged.source.extra["merged_from"]["source_candidate_ids"] == [a, b]
+    assert merged.source.extra["merged_from"]["source_session_segment_ids"] == ["seg_a", "seg_b"]
+    assert "source_session_segment_id" not in merged.source.extra
 
     # Each source is now merged and points at the new candidate.
     for source_id in (a, b):
         source = worker.get_candidate(source_id)
         assert source is not None
         assert source.status == "merged"
-        assert source.merged_into_candidate_id == merged.id
+        assert source.source.extra["merged_into_candidate_id"] == merged.id
 
 
 def test_merged_candidate_is_editable(tmp_path) -> None:
@@ -81,10 +92,10 @@ def test_merged_candidate_is_editable(tmp_path) -> None:
     b = _candidate(worker, lesson="two", evidence=["evt_2"], segment="seg_b")
     merged = worker.merge_candidates([a, b], _merged_content())
 
-    edited = worker.update_candidate(merged.id, lesson="A clearer merged lesson.")
-    assert edited.lesson == "A clearer merged lesson."
+    edited = worker.update_candidate(merged.id, details="A clearer merged lesson.")
+    assert edited.details == "A clearer merged lesson."
     # Editing does not disturb derived provenance.
-    assert edited.evidence_event_ids == ["evt_1", "evt_2"]
+    assert edited.source.evidence_event_ids == ["evt_1", "evt_2"]
 
 
 def test_merge_requires_two_distinct_sources(tmp_path) -> None:

@@ -2,48 +2,61 @@ from __future__ import annotations
 
 from starlette.testclient import TestClient
 
-from memory_mcp.core.events import EventStore, MemoryCandidateCreate
+from memory_mcp.core.models import MemoryCreate, MemorySource
+from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.review.server import create_app
+
+from conftest import FakeEmbedder
 
 
 def _seed_candidate(
-    store: EventStore,
+    root,
     *,
     lesson: str,
     evidence: list[str],
     segment: str,
 ) -> str:
-    record = store.create_memory_candidate(
-        MemoryCandidateCreate(
-            situation="When running tests.",
-            lesson=lesson,
-            action="Use uv run pytest.",
-            category="testing",
-            creation_reason="User correction.",
-            evidence_event_ids=evidence,
-            evidence_summary="User correction.",
-            source_session_segment_id=segment,
+    store = LocalMemoryStore(root, FakeEmbedder())
+    record = store.create_pending(
+        MemoryCreate(
+            when_useful="When running tests.",
+            details=f"{lesson} Use uv run pytest.",
+            tags=["testing"],
+            source=MemorySource(
+                kind="pipeline_candidate",
+                evidence_event_ids=evidence,
+                creation_reason="User correction.",
+                extra={
+                    "evidence_summary": "User correction.",
+                    "category": "testing",
+                    "source_session_segment_id": segment,
+                },
+            ),
         )
     )
     return record.id
 
 
 _MERGED_BODY = {
-    "situation": "When running tests.",
-    "lesson": "Run tests through the project environment.",
-    "action": "Use uv run pytest so dependencies resolve.",
-    "category": "testing",
+    "when_useful": "When running tests.",
+    "details": "Run tests through the project environment. Use uv run pytest so dependencies resolve.",
+    "tags": ["testing"],
     "confidence": 0.8,
-    "creation_reason": "Merged from repeated corrections.",
-    "evidence_summary": "User corrected the test command across sessions.",
+    "source": {
+        "kind": "pipeline_merge",
+        "creation_reason": "Merged from repeated corrections.",
+        "extra": {
+            "evidence_summary": "User corrected the test command across sessions.",
+            "category": "testing",
+        },
+    },
 }
 
 
 def test_merge_endpoint_creates_pending_candidate_and_marks_sources(tmp_path) -> None:
     root = tmp_path / "memory"
-    store = EventStore(root)
-    a = _seed_candidate(store, lesson="pytest fails.", evidence=["evt_1"], segment="seg_a")
-    b = _seed_candidate(store, lesson="dep errors.", evidence=["evt_2"], segment="seg_b")
+    a = _seed_candidate(root, lesson="pytest fails.", evidence=["evt_1"], segment="seg_a")
+    b = _seed_candidate(root, lesson="dep errors.", evidence=["evt_2"], segment="seg_b")
     client = TestClient(create_app(root))
 
     response = client.post(
@@ -54,8 +67,8 @@ def test_merge_endpoint_creates_pending_candidate_and_marks_sources(tmp_path) ->
     assert response.status_code == 200
     merged = response.json()["candidate"]
     assert merged["status"] == "pending_review"
-    assert merged["evidence_event_ids"] == ["evt_1", "evt_2"]
-    assert merged["metadata"]["merged_from"]["source_candidate_ids"] == [a, b]
+    assert merged["source"]["evidence_event_ids"] == ["evt_1", "evt_2"]
+    assert merged["source"]["extra"]["merged_from"]["source_candidate_ids"] == [a, b]
 
     # Sources are no longer in the pending queue.
     pending = client.get("/api/candidates").json()["candidates"]
@@ -66,8 +79,7 @@ def test_merge_endpoint_creates_pending_candidate_and_marks_sources(tmp_path) ->
 
 def test_merge_endpoint_reports_validation_error(tmp_path) -> None:
     root = tmp_path / "memory"
-    store = EventStore(root)
-    a = _seed_candidate(store, lesson="only one.", evidence=["evt_1"], segment="seg_a")
+    a = _seed_candidate(root, lesson="only one.", evidence=["evt_1"], segment="seg_a")
     client = TestClient(create_app(root))
 
     response = client.post(
@@ -81,8 +93,7 @@ def test_merge_endpoint_reports_validation_error(tmp_path) -> None:
 
 def test_archive_endpoint_hides_candidate(tmp_path) -> None:
     root = tmp_path / "memory"
-    store = EventStore(root)
-    a = _seed_candidate(store, lesson="noisy.", evidence=["evt_1"], segment="seg_a")
+    a = _seed_candidate(root, lesson="noisy.", evidence=["evt_1"], segment="seg_a")
     client = TestClient(create_app(root))
 
     response = client.post(f"/api/candidates/{a}/archive")

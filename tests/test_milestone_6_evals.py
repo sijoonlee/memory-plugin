@@ -7,9 +7,8 @@ import pytest
 from memory_mcp.core.events import (
     EventCreate,
     EventStore,
-    MemoryCandidateCreate,
 )
-from memory_mcp.core.models import MemoryCreate, MemoryFeedback
+from memory_mcp.core.models import MemoryCreate, MemoryFeedback, MemorySource
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.pipeline.extractors import (
     ExtractedMemoryCandidate,
@@ -135,9 +134,8 @@ def test_eval_mcp_tool_contract_and_feedback_events(tmp_path) -> None:
 
     created = memory_create(
         store,
-        what_happened="Direct pytest used the wrong environment.",
         when_useful="When running tests in this repo.",
-        helpful_explanation="Use uv run pytest.",
+        details="Direct pytest used the wrong environment. Use uv run pytest.",
         tags=["testing"],
         source={"kind": "manual"},
     )
@@ -161,9 +159,8 @@ def test_eval_mcp_tool_contract_and_feedback_events(tmp_path) -> None:
 
     assert search["memories"][0].keys() >= {
         "id",
-        "what_happened",
         "when_useful",
-        "helpful_explanation",
+        "details",
         "tags",
         "score",
         "confidence",
@@ -183,6 +180,7 @@ def test_eval_mcp_tool_contract_and_feedback_events(tmp_path) -> None:
 def test_eval_llm_candidate_extraction_good_session_vs_no_memory_session(tmp_path) -> None:
     root = tmp_path / "memory"
     event_store = EventStore(root)
+    memory_store = LocalMemoryStore(root, EvalEmbedder())
     useful_event = event_store.append_event(
         EventCreate(
             event_type="user_prompt",
@@ -214,6 +212,7 @@ def test_eval_llm_candidate_extraction_good_session_vs_no_memory_session(tmp_pat
     ][0]
     created = ExtractionWorker(
         event_store=event_store,
+        memory_store=memory_store,
         extractor=StaticMemoryExtractor(
             ExtractionResult(
                 candidates=[
@@ -239,6 +238,7 @@ def test_eval_llm_candidate_extraction_good_session_vs_no_memory_session(tmp_pat
     ][0]
     skipped = ExtractionWorker(
         event_store=event_store,
+        memory_store=memory_store,
         extractor=StaticMemoryExtractor(
             ExtractionResult(candidates=[], no_memory_reason="No reusable lesson.")
         ),
@@ -248,7 +248,7 @@ def test_eval_llm_candidate_extraction_good_session_vs_no_memory_session(tmp_pat
     assert event_store.get_session_segment(useful_segment.id).status == "processed"  # type: ignore[union-attr]
     assert skipped.skipped_segments == 1
     assert event_store.get_session_segment(no_memory_segment.id).status == "skipped"  # type: ignore[union-attr]
-    assert len(event_store.list_memory_candidates(status="pending_review")) == 1
+    assert len(memory_store.list_memories(status="pending_review")) == 1
 
 
 def test_eval_candidate_review_edit_approve_and_reject_workflows(tmp_path) -> None:
@@ -262,44 +262,49 @@ def test_eval_candidate_review_edit_approve_and_reject_workflows(tmp_path) -> No
             memory_store=memory_store,
         ),
     )
-    approve_candidate = event_store.create_memory_candidate(
-        MemoryCandidateCreate(
-            situation="When running tests.",
-            lesson="Use pytest.",
-            action="Run pytest.",
-            category="testing",
+    approve_candidate = memory_store.create_pending(
+        MemoryCreate(
+            when_useful="When running tests.",
+            details="Use pytest. Run pytest.",
+            tags=["testing"],
             confidence=0.5,
-            evidence_summary="User correction.",
-            creation_reason="Extractor output.",
+            source=MemorySource(
+                kind="pipeline_candidate",
+                creation_reason="Extractor output.",
+                extra={"evidence_summary": "User correction.", "category": "testing"},
+            ),
         )
     )
-    reject_candidate = event_store.create_memory_candidate(
-        MemoryCandidateCreate(
-            situation="When using docs.",
-            lesson="Do better.",
-            action="Try harder.",
-            category="weak",
+    reject_candidate = memory_store.create_pending(
+        MemoryCreate(
+            when_useful="When using docs.",
+            details="Do better. Try harder.",
+            tags=["weak"],
             confidence=0.2,
-            evidence_summary="No concrete evidence.",
-            creation_reason="Weak extractor output.",
+            source=MemorySource(
+                kind="pipeline_candidate",
+                creation_reason="Weak extractor output.",
+                extra={"evidence_summary": "No concrete evidence.", "category": "weak"},
+            ),
         )
     )
 
-    reviewed, memory = service.approve_candidate(
+    memory = service.approve_candidate(
         approve_candidate.id,
         update=CandidateUpdate(
-            lesson="Direct pytest used the wrong environment.",
-            action="Use uv run pytest.",
+            when_useful="When running tests.",
+            details="Direct pytest used the wrong environment. Use uv run pytest.",
             confidence=0.85,
         ),
     )
     rejected = service.reject_candidate(reject_candidate.id, reason="Too vague.")
 
-    assert reviewed.status == "approved"
-    assert reviewed.approved_memory_id == memory.id
-    assert memory.what_happened == "Direct pytest used the wrong environment."
+    assert memory.id == approve_candidate.id
+    assert memory.status == "active"
+    assert memory.details == "Direct pytest used the wrong environment. Use uv run pytest."
+    assert memory.confidence == 0.85
     assert rejected.status == "rejected"
-    assert rejected.rejection_reason == "Too vague."
+    assert rejected.source.extra["rejection_reason"] == "Too vague."
 
 
 def _create_memory(
@@ -312,9 +317,8 @@ def _create_memory(
 ):
     return store.create_memory(
         MemoryCreate(
-            what_happened=lesson,
             when_useful=situation,
-            helpful_explanation=action,
+            details=f"{lesson} {action}",
             tags=tags,
         )
     )

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from memory_mcp.core.events import EventCreate, EventStore, MemoryCandidateCreate
-from memory_mcp.core.models import MemoryCreate
+from memory_mcp.core.events import EventCreate, EventStore
+from memory_mcp.core.models import MemoryCreate, MemorySource
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.mcp_server import service
 from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
@@ -17,27 +17,24 @@ def _seed_scoped_memories(store: LocalMemoryStore) -> dict[str, str]:
 
     alpha = store.create_memory(
         MemoryCreate(
-            what_happened="Alpha gateway pods crashed during rollout.",
             when_useful="When deploying sdk changes for alpha.",
-            helpful_explanation="Restart alpha pods after the migration.",
+            details="Alpha gateway pods crashed during rollout. Restart alpha pods after the migration.",
             tags=["alpha"],
             project="/repos/alpha",
         )
     )
     beta = store.create_memory(
         MemoryCreate(
-            what_happened="Beta cache returned stale entries.",
             when_useful="When deploying sdk changes for beta.",
-            helpful_explanation="Flush beta cache before each release.",
+            details="Beta cache returned stale entries. Flush beta cache before each release.",
             tags=["beta"],
             project="/repos/beta",
         )
     )
     glob = store.create_memory(
         MemoryCreate(
-            what_happened="Gamma logging dropped structured fields.",
             when_useful="When deploying sdk changes for gamma.",
-            helpful_explanation="Enable gamma json formatter.",
+            details="Gamma logging dropped structured fields. Enable gamma json formatter.",
             tags=["gamma"],
         )
     )
@@ -78,9 +75,8 @@ def test_manual_create_sets_project(tmp_path) -> None:
     store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
     response = service.memory_create(
         store,
-        what_happened="Lesson body.",
         when_useful="Situation.",
-        helpful_explanation="Action.",
+        details="Lesson body. Action.",
         project="/repos/manual",
     )
     record_id = response["memory"]["id"]
@@ -129,21 +125,24 @@ def test_approval_carries_project_from_segment(tmp_path) -> None:
     assert segment.project == "/repos/scoped"
 
     worker = CandidateWorker(event_store=event_store, memory_store=memory_store)
-    candidate = event_store.create_memory_candidate(
-        MemoryCandidateCreate(
-            situation="When running tests in this repo.",
-            lesson="Direct pytest uses the wrong environment.",
-            action="Use uv run pytest.",
-            category="durable_workflow",
+    # The extractor records the segment's project on the pending memory.
+    candidate = worker.create_candidate(
+        MemoryCreate(
+            when_useful="When running tests in this repo.",
+            details="Direct pytest uses the wrong environment. Use uv run pytest.",
+            tags=["durable_workflow"],
             confidence=0.8,
-            creation_reason="User correction in session.",
-            evidence_event_ids=["evt_1"],
-            evidence_summary="The user corrected the test command.",
-            source_session_segment_id=segment.id,
+            project=segment.project,
+            source=MemorySource(
+                kind="pipeline_candidate",
+                evidence_event_ids=["evt_1"],
+                creation_reason="User correction in session.",
+                extra={"source_session_segment_id": segment.id},
+            ),
         )
     )
 
-    _, memory = worker.approve_candidate(candidate.id)
+    memory = worker.approve_candidate(candidate.id)
 
     assert memory.project == "/repos/scoped"
 
@@ -154,20 +153,22 @@ def test_merged_candidate_approves_as_global(tmp_path) -> None:
     event_store = EventStore(tmp_path / "memory")
     memory_store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
     worker = CandidateWorker(event_store=event_store, memory_store=memory_store)
-    candidate = event_store.create_memory_candidate(
-        MemoryCandidateCreate(
-            situation="Situation.",
-            lesson="Lesson.",
-            action="Action.",
-            category="durable_workflow",
+    candidate = worker.create_candidate(
+        MemoryCreate(
+            when_useful="Situation.",
+            details="Lesson. Action.",
+            tags=["durable_workflow"],
             confidence=0.8,
-            creation_reason="merge",
-            evidence_event_ids=["evt_1"],
-            evidence_summary="summary",
-            source_session_segment_id=None,
+            project=None,
+            source=MemorySource(
+                kind="pipeline_merge",
+                evidence_event_ids=["evt_1"],
+                creation_reason="merge",
+                extra={"evidence_summary": "summary"},
+            ),
         )
     )
 
-    _, memory = worker.approve_candidate(candidate.id)
+    memory = worker.approve_candidate(candidate.id)
 
     assert memory.project is None

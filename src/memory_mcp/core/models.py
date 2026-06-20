@@ -7,11 +7,13 @@ from pydantic import BaseModel, Field
 
 
 MemoryStatus = Literal[
+    "pending_review",
     "active",
     "stale",
     "superseded",
     "invalid",
     "rejected",
+    "merged",
     "archived",
 ]
 MemoryFeedbackSignal = Literal[
@@ -41,9 +43,10 @@ class MemorySource(BaseModel):
 
 
 class MemoryCreate(BaseModel):
-    what_happened: str
+    # ``when_useful`` is the recall cue: the catalog line, the search embedding
+    # cue, and the ``memory_get`` trigger. ``details`` is the free-form body.
     when_useful: str
-    helpful_explanation: str
+    details: str
     tags: list[str] = Field(default_factory=list)
     source: MemorySource = Field(default_factory=MemorySource)
     confidence: float = Field(default=0.7, ge=0.0, le=1.0)

@@ -37,9 +37,6 @@ class EventRecord(EventCreate):
 
 
 SessionStatus = Literal["open", "idle", "processed", "skipped", "failed"]
-CandidateStatus = Literal[
-    "pending_review", "approved", "rejected", "merged", "archived"
-]
 
 
 class SessionSegmentRecord(BaseModel):
@@ -53,31 +50,6 @@ class SessionSegmentRecord(BaseModel):
     status: SessionStatus
     processed_at: datetime | None = None
     error: str | None = None
-
-
-class MemoryCandidateCreate(BaseModel):
-    situation: str
-    lesson: str
-    action: str
-    category: str
-    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
-    creation_reason: str
-    evidence_event_ids: list[str] = Field(default_factory=list)
-    evidence_summary: str
-    source_session_segment_id: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class MemoryCandidateRecord(MemoryCandidateCreate):
-    id: str
-    status: CandidateStatus = "pending_review"
-    created_at: datetime
-    updated_at: datetime
-    approved_at: datetime | None = None
-    approved_memory_id: str | None = None
-    rejected_at: datetime | None = None
-    rejection_reason: str | None = None
-    merged_into_candidate_id: str | None = None
 
 
 class EventStore:
@@ -432,74 +404,6 @@ class EventStore:
                 ),
             )
 
-    def create_memory_candidate(
-        self,
-        candidate: MemoryCandidateCreate,
-    ) -> MemoryCandidateRecord:
-        now = utc_now()
-        record = MemoryCandidateRecord(
-            id=f"cand_{uuid.uuid4().hex}",
-            created_at=now,
-            updated_at=now,
-            **candidate.model_dump(),
-        )
-        with self._connect() as conn:
-            self._insert_candidate(conn, record)
-        return record
-
-    def get_memory_candidate(self, candidate_id: str) -> MemoryCandidateRecord | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM memory_candidates WHERE id = ?",
-                (candidate_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return _row_to_memory_candidate(row)
-
-    def list_memory_candidates(
-        self,
-        *,
-        status: str | None = None,
-    ) -> list[MemoryCandidateRecord]:
-        query = "SELECT * FROM memory_candidates"
-        params: tuple[Any, ...] = ()
-        if status is not None:
-            query += " WHERE status = ?"
-            params = (status,)
-        query += " ORDER BY created_at, id"
-        with self._connect() as conn:
-            rows = conn.execute(query, params).fetchall()
-        return [_row_to_memory_candidate(row) for row in rows]
-
-    def update_memory_candidate(self, candidate: MemoryCandidateRecord) -> None:
-        updated = candidate.model_copy(update={"updated_at": utc_now()})
-        with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE memory_candidates
-                SET situation = ?,
-                    lesson = ?,
-                    action = ?,
-                    category = ?,
-                    confidence = ?,
-                    creation_reason = ?,
-                    evidence_event_ids_json = ?,
-                    evidence_summary = ?,
-                    source_session_segment_id = ?,
-                    metadata_json = ?,
-                    status = ?,
-                    updated_at = ?,
-                    approved_at = ?,
-                    approved_memory_id = ?,
-                    rejected_at = ?,
-                    rejection_reason = ?,
-                    merged_into_candidate_id = ?
-                WHERE id = ?
-                """,
-                _candidate_update_params(updated),
-            )
-
     def _init_sqlite(self) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -565,37 +469,6 @@ class EventStore:
                 ON session_segments(project, session_id, segment_index)
                 """
             )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS memory_candidates (
-                    id TEXT PRIMARY KEY,
-                    situation TEXT NOT NULL,
-                    lesson TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    category TEXT NOT NULL,
-                    confidence REAL NOT NULL,
-                    creation_reason TEXT NOT NULL,
-                    evidence_event_ids_json TEXT NOT NULL,
-                    evidence_summary TEXT NOT NULL,
-                    source_session_segment_id TEXT,
-                    metadata_json TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    approved_at TEXT,
-                    approved_memory_id TEXT,
-                    rejected_at TEXT,
-                    rejection_reason TEXT,
-                    merged_into_candidate_id TEXT
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_memory_candidates_status
-                ON memory_candidates(status, created_at)
-                """
-            )
             checkpoints.create_checkpoints_table(conn)
 
     def _connect(self) -> sqlite3.Connection:
@@ -635,26 +508,6 @@ class EventStore:
         with self._connect() as own:
             checkpoints.set_checkpoint(own, name, value)
 
-    def _insert_candidate(
-        self,
-        conn: sqlite3.Connection,
-        candidate: MemoryCandidateRecord,
-    ) -> None:
-        conn.execute(
-            """
-            INSERT INTO memory_candidates (
-                id, situation, lesson, action, category, confidence,
-                creation_reason, evidence_event_ids_json, evidence_summary,
-                source_session_segment_id, metadata_json, status, created_at,
-                updated_at, approved_at, approved_memory_id, rejected_at,
-                rejection_reason, merged_into_candidate_id
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            _candidate_insert_params(candidate),
-        )
-
-
 def _row_to_event(row: sqlite3.Row) -> EventRecord:
     return EventRecord(
         id=row["id"],
@@ -683,77 +536,6 @@ def _row_to_session_segment(row: sqlite3.Row) -> SessionSegmentRecord:
         status=row["status"],
         processed_at=_optional_text_to_dt(row["processed_at"]),
         error=row["error"],
-    )
-
-
-def _row_to_memory_candidate(row: sqlite3.Row) -> MemoryCandidateRecord:
-    return MemoryCandidateRecord(
-        id=row["id"],
-        situation=row["situation"],
-        lesson=row["lesson"],
-        action=row["action"],
-        category=row["category"],
-        confidence=row["confidence"],
-        creation_reason=row["creation_reason"],
-        evidence_event_ids=json.loads(row["evidence_event_ids_json"]),
-        evidence_summary=row["evidence_summary"],
-        source_session_segment_id=row["source_session_segment_id"],
-        metadata=json.loads(row["metadata_json"]),
-        status=row["status"],
-        created_at=_text_to_dt(row["created_at"]),
-        updated_at=_text_to_dt(row["updated_at"]),
-        approved_at=_optional_text_to_dt(row["approved_at"]),
-        approved_memory_id=row["approved_memory_id"],
-        rejected_at=_optional_text_to_dt(row["rejected_at"]),
-        rejection_reason=row["rejection_reason"],
-        merged_into_candidate_id=row["merged_into_candidate_id"],
-    )
-
-
-def _candidate_insert_params(candidate: MemoryCandidateRecord) -> tuple[Any, ...]:
-    return (
-        candidate.id,
-        candidate.situation,
-        candidate.lesson,
-        candidate.action,
-        candidate.category,
-        candidate.confidence,
-        candidate.creation_reason,
-        json.dumps(candidate.evidence_event_ids),
-        candidate.evidence_summary,
-        candidate.source_session_segment_id,
-        json.dumps(candidate.metadata),
-        candidate.status,
-        _dt_to_text(candidate.created_at),
-        _dt_to_text(candidate.updated_at),
-        _optional_dt_to_text(candidate.approved_at),
-        candidate.approved_memory_id,
-        _optional_dt_to_text(candidate.rejected_at),
-        candidate.rejection_reason,
-        candidate.merged_into_candidate_id,
-    )
-
-
-def _candidate_update_params(candidate: MemoryCandidateRecord) -> tuple[Any, ...]:
-    return (
-        candidate.situation,
-        candidate.lesson,
-        candidate.action,
-        candidate.category,
-        candidate.confidence,
-        candidate.creation_reason,
-        json.dumps(candidate.evidence_event_ids),
-        candidate.evidence_summary,
-        candidate.source_session_segment_id,
-        json.dumps(candidate.metadata),
-        candidate.status,
-        _dt_to_text(candidate.updated_at),
-        _optional_dt_to_text(candidate.approved_at),
-        candidate.approved_memory_id,
-        _optional_dt_to_text(candidate.rejected_at),
-        candidate.rejection_reason,
-        candidate.merged_into_candidate_id,
-        candidate.id,
     )
 
 

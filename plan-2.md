@@ -13,12 +13,133 @@ on the agent to remember to search.
 
 ---
 
-## Priority 1 — Improve taxonomy: `user` / `feedback` / `project` / `reference`
+## Milestone 18 — Storage layer: unify the model, then draw the adapter boundary
+
+Two sub-steps. **18-1 unifies the candidate and memory into one model** (a candidate
+is a memory with `status="pending_review"`); **18-2 draws the storage-protocol seam**
+so that one model can move to a shared backend in M22 while events stay local. 18-1
+lands first because it decides *what* the 18-2 protocol wraps. Data does not need to
+be migrated — the store has been experimental so far, so the existing `.memory-mcp`
+can be recreated from scratch.
+
+### Milestone 18-1 — Unify candidate & memory into one model
+
+#### Goal
+Make a memory candidate and a memory the **same model**, distinguished only by
+`status`. "Approving" a candidate becomes a status transition
+(`pending_review → active`), not a translation between two schemas. Today the two
+carry near-identical data under different field names
+(`situation/lesson/action` vs `what_happened/when_useful/helpful_explanation`) and
+live in different stores; this collapses them.
+
+#### Model (two-field core)
+- `when_useful` — recall cue doing triple duty: the Layer-1 catalog line (M20), the
+  `memory_search` embedding cue, and the `memory_get` trigger. Keystone field; keep
+  the name.
+- `details` — free-form body (Layer 2). **Replaces** today's `what_happened` +
+  `helpful_explanation`; type-neutral across the M19 taxonomy.
+- plus `memory_type` (M19), `tags`, `source`, `confidence`, `score`, `project`.
+- `status` — union lifecycle: `pending_review → active → {stale | superseded |
+  invalid}`, plus `rejected | merged | archived`. `memory_search` already filters to
+  `status="active"`, so pending rows are naturally excluded from retrieval.
+
+#### Approval = transition handler (not a bare flip)
+`pending_review → active` must still do the two things `create_memory` does today:
+(a) **embed** the text into the vector store, and (b) **dedupe-on-create**. The three
+dedupe outcomes map onto statuses — keep → `active`, duplicate-merge → `merged`,
+reject → `rejected`. **Embed at activation**: pending rows stay un-embedded; merge
+clustering (M13) keeps its lexical signal for now.
+
+#### Extractor stays at its JSON contract
+The LLM extractor's structured output (`situation/lesson/action/category/…`,
+`extractors.py`) is unchanged. The single composition chokepoint
+(`ExtractionWorker._create_candidates`) maps it into the unified shape instead of a
+`MemoryCandidateCreate`:
+- `situation` → `when_useful`
+- `lesson` + `action` → `details` (composed)
+- `category` → `memory_type` (M19)
+- `confidence`, `evidence_event_ids`, `evidence_summary`, `source_session_segment_id`
+  → `confidence` / `source`
+
+Candidate-only provenance lives in `MemorySource`, which already carries
+`evidence_event_ids` + `creation_reason`.
+
+#### Changes
+- **Model:** fold `MemoryCandidateCreate` / `MemoryCandidateRecord` into
+  `MemoryCreate` / `MemoryRecord` (`core/models.py`); rename body fields to
+  `when_useful` + `details`; extend `MemoryStatus` with `pending_review` + `merged`;
+  remove the parallel candidate model from `core/events.py`.
+- **Generation:** `ExtractionWorker._create_candidates` and the merge workers
+  (`merge_proposal_worker.py`, `CandidateWorker.merge_candidates`) construct
+  `pending_review` memories.
+- **Approval:** replace `_candidate_to_memory_create` + `approve_candidate` with an
+  `activate(memory_id)` transition that embeds + dedupes and sets the resulting status.
+- **Surfaces:** `candidate_list` / review service / CLI list `pending_review`
+  memories; old field names (`what_happened`, `helpful_explanation`) updated
+  everywhere (incl. `_MEMORY_SUMMARY_FIELDS`).
+
+#### Files
+`core/models.py`, `core/events.py`, `core/store.py`,
+`pipeline/workers/extraction_worker.py`, `pipeline/workers/candidate_worker.py`,
+`pipeline/workers/merge_proposal_worker.py`, `review/service.py`, `mcp_server/*`,
+`cli.py`, tests.
+
+#### Verification
+- Round-trip: extractor output → `pending_review` memory → `activate` → `active`
+  memory; `when_useful` + `details` populated; dedupe still merges/rejects.
+- `memory_search` excludes `pending_review`; the M20 catalog lists only `active`.
+
+### Milestone 18-2 — Storage adapter boundary (M22 prep)
+
+#### Goal
+After 18-1 there is **one** model and **one** store, so draw a single storage-protocol
+seam: a `MemoryStore` protocol that `LocalMemoryStore` satisfies, so the whole
+memory + candidate dataset can move to a shared backend in M22 (Postgres/pgvector or
+hosted) while **events** stay local in `EventStore`. That swap is only cheap if callers
+depend on the *interface*, not on `LocalMemoryStore` concretely — this is that
+interface.
+
+#### What changed vs the original adapter plan
+18-1 makes a separate `CandidateStore` unnecessary: candidates are `pending_review`
+rows in the memory store, so there is **no** `memory_candidates` table to relocate out
+of `events.sqlite`. One protocol, not two; no table move.
+
+#### Changes
+- **Protocol:** add a `MemoryStore` Protocol (new `core/protocols.py`) matching
+  `LocalMemoryStore`'s public surface (`create_memory`, `search_memories`,
+  `get_memory`, `list_memories`, `record_feedback`, `delete_memory`, the
+  pending/`activate` ops from 18-1, …); assert `LocalMemoryStore` satisfies it
+  structurally.
+- **Rewire callers** to depend on the protocol, not the concrete class — the few
+  construction sites (`cli.py`, `operator.py`, `review/service.py`,
+  `mcp_server/server.py`). `EventStore` is untouched (events stay local).
+- **Cross-store references stay opaque audit ids.** A pending memory's
+  `source.evidence_event_ids` / `source_session_segment_id` point into local event
+  data; resolved against `EventStore` only when needed (e.g. project lookup from a
+  segment). No cross-database join assumed.
+
+#### Files
+`core/protocols.py` (new), `core/store.py` (conform), `cli.py`, `operator.py`,
+`review/service.py`, `mcp_server/server.py`, tests.
+
+#### Verification
+- `uv run pytest` green; no behavior change to retrieval/scoring/review.
+- A test-only in-memory `MemoryStore` fake substitutes through the same callers
+  (proves swappability for M22).
+
+> Sequencing: 18-1 → 18-2, both **M22 prep** and independent of the read-side
+> taxonomy/catalog/hook work (M19–M21). Land before M22.
+
+---
+
+## Milestone 19 — Improve taxonomy: `user` / `feedback` / `project` / `reference`
 
 ### Goal
-Give each memory a constrained **type** from a fixed 4-value taxonomy, instead of
-the current freeform candidate `category` string. Carry it through to the stored
-memory.
+Give each memory a constrained **type** from a fixed 4-value taxonomy. This replaces
+the extractor's current freeform 5-value `category` label (`clue_location`/…). After
+the model unification (18-1) there is a single `Memory` model, so `memory_type` is one
+field — set when the `pending_review` memory is created and carried through to
+`active` — with no separate candidate model to thread it through.
 
 - `user` — who the user is (role, expertise, durable preferences)
 - `feedback` — how the agent should *work* (corrections, confirmed approaches) + *why*
@@ -30,7 +151,7 @@ memory.
   reviewer) classify before saving. If a candidate doesn't fit a type cleanly, it's
   usually junk — this raises the store's signal-to-noise, the same way it does for
   Claude Code's own memory.
-- **It is the prerequisite for a good catalog (Priority 2).** A typed catalog can be
+- **It is the prerequisite for a good catalog (Milestone 20).** A typed catalog can be
   **grouped and scoped** — e.g. always surface `user` + `feedback`, surface
   `project` only for the active repo. Without types, the catalog is a flat,
   undifferentiated list that's harder for the agent to scan.
@@ -42,28 +163,27 @@ memory.
 
 ### Changes
 - **Schema:** add `memory_type: Literal["user","feedback","project","reference"]`
-  to `MemoryCreate` (inherited by `MemoryRecord`) in `core/models.py`, plus a DB
-  column (mirror how `project` was added in M17 — denormalized column + backfill
-  for pre-existing rows; pick a default like `project` or `reference` for legacy
-  memories).
-- **Candidate side:** introduce the same typed field on `MemoryCandidateCreate`
-  (`core/events.py`) — either replace the freeform `category` or keep `category`
-  as an optional free sub-label *under* the type.
-- **Extractor:** update the extraction prompt (`pipeline/extractors.py`) to classify
-  each candidate into exactly one type, with the per-type definitions above and the
-  "if it doesn't fit, skip it" instruction.
-- **Propagation:** carry the type from candidate → memory on approval
-  (`pipeline/workers/candidate_worker.py`).
+  to the unified `MemoryCreate` (inherited by `MemoryRecord`) in `core/models.py`,
+  plus a DB column (mirror how `project` was added in M17 — denormalized column +
+  backfill for pre-existing rows; pick a default like `reference` or `project` for
+  legacy rows). One model after 18-1, so this is the only place the field is added.
+- **Extractor:** replace the extractor's freeform 5-value `category`
+  (`clue_location`/… in `pipeline/extractors.py`) with the 4-value `memory_type`
+  taxonomy; update the prompt to classify into exactly one type, with the per-type
+  definitions above and the "if it doesn't fit, skip it" instruction. The 18-1
+  composition chokepoint (`_create_candidates`) then sets `memory_type` directly.
+- **Propagation:** nothing extra — `memory_type` is set when the `pending_review`
+  memory is created and simply persists through `pending_review → active` (no
+  cross-model carry, since candidate and memory are one model).
 - **Surface:** add `memory_type` to `_MEMORY_SUMMARY_FIELDS` (`mcp_server/service.py`)
   and the `create` / `search` CLI + MCP tools.
 
 ### Files
-`core/models.py`, `core/events.py`, `pipeline/extractors.py`,
-`pipeline/workers/candidate_worker.py`, `mcp_server/service.py`, `cli.py`, tests.
+`core/models.py`, `pipeline/extractors.py`, `mcp_server/service.py`, `cli.py`, tests.
 
 ---
 
-## Priority 2 — Two-layer "memory on demand": catalog `when_useful` → `id`, pull on need
+## Milestone 20 — Two-layer "memory on demand": catalog `when_useful` → `id`, pull on need
 
 ### Goal
 Generate a compact **catalog** (Layer 1) of `when_useful` → `id` lines that the host
@@ -87,7 +207,7 @@ See `brain-storm.md` → *# Good idea: using the two-layer approach*.
 ### Changes
 - **Catalog generator:** a function/formatter over
   `LocalMemoryStore.list_memories(project=…)` projecting each memory to a
-  `when_useful` → `id` line, **grouped by `memory_type`** (Priority 1), project-scoped
+  `when_useful` → `id` line, **grouped by `memory_type`** (Milestone 19), project-scoped
   (M17: repo memories + globals).
 - **CLI command:** `memory-mcp catalog [--project] [--limit]` that prints the catalog
   block to stdout (so a hook can emit it). Bounding: small store → all; large store →
@@ -109,17 +229,17 @@ Call memory_get(<id>) to read the full memory when a line looks relevant.
 `when_useful` now does **double duty**: embedding cue for `memory_search` *and* the
 catalog line the agent scans. Its quality decides whether the agent picks the right
 memory → reinforces sharp, situation-specific `when_useful` text in the extractor
-prompt (ties back to Priority 1's extractor work).
+prompt (ties back to Milestone 19's extractor work).
 
 ### Files
 `mcp_server/service.py` (or a new `catalog.py`), `cli.py`, tests.
 
 ---
 
-## Priority 3 — Use a hook (harness) to inject the catalog
+## Milestone 21 — Use a hook (harness) to inject the catalog
 
 ### Goal
-Inject the Priority 2 catalog into the host agent's context **deterministically** via
+Inject the Milestone 20 catalog into the host agent's context **deterministically** via
 a Claude Code hook, so the agent always sees what memories exist without being asked.
 See `brain-storm.md` → *# Hook to inject prompt*.
 
@@ -133,7 +253,7 @@ See `brain-storm.md` → *# Hook to inject prompt*.
   authority) is the *correct* channel. This is exactly why A3 (catalog) is a better
   fit for a guest than trying to force `memory_create` (which would need authority a
   guest can't get).
-- **It completes the loop.** Priorities 1–2 produce a good, typed, scannable catalog;
+- **It completes the loop.** Milestones 19–20 produce a good, typed, scannable catalog;
   the hook is what actually puts it in front of the agent. Without it, the catalog is
   inert.
 - **Reuses existing infrastructure.** The plugin already ships event-producer hooks
@@ -165,27 +285,27 @@ command), `.claude-plugin/plugin.json` (no change if the hooks file path is reus
 
 ## Sequencing & rationale
 
-1. **Priority 1 (taxonomy) first** — it shapes both the catalog grouping (P2) and the
+1. **Milestone 19 (taxonomy) first** — it shapes both the catalog grouping (M20) and the
    extractor output; doing it first avoids reworking the catalog later.
-2. **Priority 2 (catalog) second** — depends on P1 for typed grouping; pure read-side,
+2. **Milestone 20 (catalog) second** — depends on M19 for typed grouping; pure read-side,
    no formation changes.
-3. **Priority 3 (hook) last** — depends on P2's catalog command existing; it's the
-   thin delivery layer that makes P1+P2 visible to the agent.
+3. **Milestone 21 (hook) last** — depends on M20's catalog command existing; it's the
+   thin delivery layer that makes M19+M20 visible to the agent.
 
-Each step is independently shippable and reversible. P2+P3 touch **only the read
-path** — formation, storage, and the extractor are untouched except for P1's typing.
+Each step is independently shippable and reversible. M20+M21 touch **only the read
+path** — formation, storage, and the extractor are untouched except for M19's typing.
 
 ---
 
 ## Verification (end-to-end, when built)
 
-- **P1:** `uv run pytest` for schema/extractor/propagation; create a memory of each
+- **M19:** `uv run pytest` for schema/extractor/propagation; create a memory of each
   type via CLI + MCP and confirm `memory_type` round-trips and appears in
   `memory_list` / `memory_get`.
-- **P2:** `uv run memory-mcp catalog --project <repo>` prints typed `when_useful`→`id`
+- **M20:** `uv run memory-mcp catalog --project <repo>` prints typed `when_useful`→`id`
   lines, project-scoped (repo + globals), bounded by `--limit`; tests assert grouping,
   scoping, and that ids resolve via `memory_get`.
-- **P3:** install the plugin, start a Claude Code session in a repo with memories, and
+- **M21:** install the plugin, start a Claude Code session in a repo with memories, and
   confirm the catalog appears in context at session start; the agent can then
   `memory_get(<id>)` a listed memory. Verify the `append` event hooks still fire
   (the new hook doesn't interfere).
@@ -200,3 +320,47 @@ path** — formation, storage, and the extractor are untouched except for P1's t
 - **Catalog bound:** top-N cutoff and ordering (by `score`? recency? type priority?).
 - **Catalog scope at injection:** all types always, or type-filtered (e.g. omit
   `reference` unless relevant)?
+
+---
+
+## Milestone 22: Shared Online Memory Server (BE + FE)
+
+This milestone graduates Memory MCP from a single-user local tool into a shared,
+online service used by multiple developers. It is explicitly post-V1 (see
+"Multi-user cloud service" under Non-Goals For V1) and should not begin until the
+local MVP and adapter/packaging milestones are stable.
+
+Guiding principle: keep all behavior in the service/store layer so the MCP server,
+CLI, and a new HTTP backend are thin front doors over the same logic. Do not push
+agent- or transport-specific assumptions into core retrieval, scoring, or review.
+
+- backend service:
+  - extract a backend API (REST or GraphQL) over the existing service functions
+    (`mcp_server/service.py`, `operator.py`) without forking business logic
+  - replace file-based SQLite + LanceDB with a concurrent server datastore
+    (for example Postgres + pgvector or a hosted vector store)
+  - keep a migration/export path from local `.memory-mcp` stores into the server
+    (reuse JSONL import/export)
+  - make the MCP server connect to the backend (remote MCP over HTTP, or MCP as a
+    thin client of the backend API) instead of reading local files directly
+- identity, scoping, and access control:
+  - add developer/user identity on events, feedback, memories, and candidates
+  - extend scoping beyond project to support per-user, per-project, and explicitly
+    shared memories
+  - add authentication and authorization (who can read, create, approve, delete)
+  - preserve provenance and audit trails across users
+- multi-writer correctness:
+  - replace single-writer file assumptions with concurrent-safe transactions
+  - handle concurrent dedupe-on-create and candidate approval without races
+- frontend:
+  - build a dedicated web UI for search, browse, candidate review, and store health
+  - reuse the read-only inspection contracts (`memory_status`, `memory_list`,
+    `candidate_list`) as the first read API, and the review service for actions
+  - treat the local review UI (Milestone 5A) as throwaway once the FE exists
+- operations:
+  - deployment, backups, observability, and rate limiting for a shared service
+  - privacy controls and tenant isolation; redaction (Milestone 11) becomes mandatory
+- compatibility:
+  - keep the local single-user mode working for offline/solo use
+  - keep the normal operator workflow verbs (`status` / `process` / `review`)
+    available against the backend

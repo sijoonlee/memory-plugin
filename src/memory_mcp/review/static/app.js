@@ -40,9 +40,9 @@ async function loadCandidates() {
     row.type = "button";
     row.className = `candidate-row ${candidate.id === state.selectedId ? "active" : ""}`;
     row.innerHTML = `
-      <div class="row-title">${escapeHtml(candidate.lesson)}</div>
-      <div class="row-meta">${escapeHtml(candidate.category)} · ${candidate.confidence.toFixed(2)} · ${escapeHtml(candidate.status)}</div>
-      <div class="row-meta">${escapeHtml(candidate.situation)}</div>
+      <div class="row-title">${escapeHtml(candidate.details)}</div>
+      <div class="row-meta">${escapeHtml(candidateCategory(candidate))} · ${candidate.confidence.toFixed(2)} · ${escapeHtml(candidate.status)}</div>
+      <div class="row-meta">${escapeHtml(candidate.when_useful)}</div>
     `;
     row.addEventListener("click", () => selectCandidate(candidate.id));
     listEl.append(row);
@@ -59,7 +59,7 @@ async function loadMemories() {
     row.type = "button";
     row.className = `candidate-row ${memory.id === state.selectedId ? "active" : ""}`;
     row.innerHTML = `
-      <div class="row-title">${escapeHtml(memory.what_happened)}</div>
+      <div class="row-title">${escapeHtml(memory.details)}</div>
       <div class="row-meta">memory · score ${memory.score.toFixed(2)} · ${escapeHtml(memory.status)}</div>
       <div class="row-meta">${escapeHtml(memory.when_useful)}</div>
     `;
@@ -83,8 +83,7 @@ function renderMemoryDetail(memory) {
       <div class="panel">
         <h2>Active Memory (read-only)</h2>
         ${readonlyField("When Useful", memory.when_useful)}
-        ${readonlyField("What Happened", memory.what_happened)}
-        ${readonlyField("Helpful Explanation", memory.helpful_explanation)}
+        ${readonlyField("Details", memory.details)}
         ${readonlyField("Tags", (memory.tags || []).join(", "))}
         <div class="meta">Edits are disabled for active memories.</div>
       </div>
@@ -216,13 +215,11 @@ function renderDetail(data, includeSegmentEvents) {
       <div class="panel">
         <h2>Candidate</h2>
         <form class="editor" id="editor">
-          ${textarea("situation", "Situation", candidate.situation)}
-          ${textarea("lesson", "Lesson", candidate.lesson)}
-          ${textarea("action", "Action", candidate.action)}
-          <label>Category<input name="category" value="${escapeAttr(candidate.category)}"></label>
+          ${textarea("when_useful", "When Useful", candidate.when_useful)}
+          ${textarea("details", "Details", candidate.details)}
+          <label>Tags<input name="tags" value="${escapeAttr((candidate.tags || []).join(", "))}"></label>
           <label>Confidence<input name="confidence" type="number" min="0" max="1" step="0.05" value="${candidate.confidence}"></label>
-          ${textarea("creation_reason", "Creation Reason", candidate.creation_reason)}
-          ${textarea("evidence_summary", "Evidence Summary", candidate.evidence_summary)}
+          ${readonlyField("Evidence Summary", (candidate.source && candidate.source.extra && candidate.source.extra.evidence_summary) || "")}
           <div class="actions">
             <button type="submit">Save Draft</button>
             <button type="button" id="approve">Approve</button>
@@ -338,15 +335,22 @@ async function retrySegment(segmentId) {
 
 function editorBody() {
   const form = new FormData(document.querySelector("#editor"));
+  const tags = String(form.get("tags") || "")
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter((tag) => tag.length > 0);
   return {
-    situation: form.get("situation"),
-    lesson: form.get("lesson"),
-    action: form.get("action"),
-    category: form.get("category"),
+    when_useful: form.get("when_useful"),
+    details: form.get("details"),
+    tags,
     confidence: Number(form.get("confidence")),
-    creation_reason: form.get("creation_reason"),
-    evidence_summary: form.get("evidence_summary"),
   };
+}
+
+function candidateCategory(candidate) {
+  const fromExtra = candidate.source && candidate.source.extra && candidate.source.extra.category;
+  if (fromExtra) return fromExtra;
+  return (candidate.tags && candidate.tags[0]) || "";
 }
 
 async function request(path, options = {}) {
