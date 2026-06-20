@@ -415,11 +415,16 @@ class LocalMemoryStore:
             )
             self._ensure_memories_project_column(conn)
             self._ensure_memories_is_reviewed_column(conn)
+            self._ensure_memories_memory_type_column(conn)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_memory_type "
+                "ON memories(memory_type)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memories_status_reviewed "
@@ -451,6 +456,18 @@ class LocalMemoryStore:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(memories)")}
         if "project" not in columns:
             conn.execute("ALTER TABLE memories ADD COLUMN project TEXT")
+
+    def _ensure_memories_memory_type_column(self, conn: sqlite3.Connection) -> None:
+        """Add the denormalized ``memory_type`` column (M19) in place.
+
+        Nullable with no backfill — pre-M19 rows stay untyped (``NULL``); the
+        canonical value lives in ``record_json`` and the column is a cheap filter
+        for typed grouping (M20 catalog).
+        """
+
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(memories)")}
+        if "memory_type" not in columns:
+            conn.execute("ALTER TABLE memories ADD COLUMN memory_type TEXT")
 
     def _ensure_memories_is_reviewed_column(self, conn: sqlite3.Connection) -> None:
         """Add the denormalized ``is_reviewed`` column to pre-M18-3 stores.
@@ -518,9 +535,10 @@ class LocalMemoryStore:
                 """
                 INSERT INTO memories (
                     id, record_json, content_for_embedding, tags_json, score,
-                    confidence, status, project, is_reviewed, created_at, updated_at
+                    confidence, status, project, memory_type, is_reviewed,
+                    created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.id,
@@ -531,6 +549,7 @@ class LocalMemoryStore:
                     record.confidence,
                     record.status,
                     record.project,
+                    record.memory_type,
                     int(record.is_reviewed),
                     _dt_to_text(record.created_at),
                     _dt_to_text(record.updated_at),

@@ -220,7 +220,7 @@ def test_eval_llm_candidate_extraction_good_session_vs_no_memory_session(tmp_pat
                         situation="When running tests in this repo.",
                         lesson="Direct pytest uses the wrong environment.",
                         action="Use uv run pytest.",
-                        category="durable_workflow",
+                        memory_type="project",
                         confidence=0.8,
                         evidence_event_ids=[useful_event.id],
                         evidence_summary="The user gave the durable test command.",
@@ -272,7 +272,7 @@ def test_eval_candidate_review_edit_approve_and_reject_workflows(tmp_path) -> No
             source=MemorySource(
                 kind="pipeline_candidate",
                 creation_reason="Extractor output.",
-                extra={"evidence_summary": "User correction.", "category": "testing"},
+                extra={"evidence_summary": "User correction."},
             ),
         )
     )
@@ -285,7 +285,7 @@ def test_eval_candidate_review_edit_approve_and_reject_workflows(tmp_path) -> No
             source=MemorySource(
                 kind="pipeline_candidate",
                 creation_reason="Weak extractor output.",
-                extra={"evidence_summary": "No concrete evidence.", "category": "weak"},
+                extra={"evidence_summary": "No concrete evidence."},
             ),
         )
     )

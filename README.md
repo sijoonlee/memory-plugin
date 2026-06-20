@@ -56,6 +56,26 @@ Command surfaces:
 - `memory-mcp-event`: append hook/event log rows and inspect event backlog
 - `memory-mcp-review`: run the local memory-manager UI/API (unread inbox, archive, delete)
 
+## Memory Types
+
+Every memory carries a constrained **type** (`memory_type`) drawn from a fixed
+four-value taxonomy. The extractor classifies each memory into exactly one type
+when it is created, and you can set it explicitly on manual memories. A fixed
+taxonomy is a precision forcing-function: if a memory does not fit one type
+cleanly it is usually low-signal, so the extractor is told to skip it.
+
+| Type | What it captures | Example |
+| --- | --- | --- |
+| `user` | Who the user is — role, expertise, durable preferences | "Prefers `uv` over `pip`; reviews diffs before merge." |
+| `feedback` | How the agent should *work* — corrections and confirmed approaches, with the *why* and how to apply it | "Run tests with `uv run pytest`, not bare `pytest` (wrong environment)." |
+| `project` | Ongoing work, goals, or constraints **not derivable from the code or git history** | "The shared registry is post-V1; keep the local store as source of truth." |
+| `reference` | A pointer to an external resource (URL, doc, dashboard, ticket) | "Deploy runbook: https://example.com/runbook" |
+
+The type is **optional** — a memory may be untyped (`null`) when neither the
+classifier nor the caller assigned one (e.g. older rows predating the taxonomy;
+no backfill is performed). It is surfaced everywhere a memory is: `memory_create`
+and `memory_search` (CLI + MCP), the review UI, and the `Type` filter there.
+
 ## Daily Workflow
 
 For normal local use, start with the higher-level workflow commands:
@@ -153,18 +173,20 @@ Create a memory:
 
 ```bash
 uv run memory-mcp create \
-  --situation "When running tests in this repo." \
-  --lesson "Direct pytest used the wrong environment." \
-  --action "Use uv run pytest so dependencies resolve from the project environment." \
+  --when-useful "When running tests in this repo." \
+  --details "Direct pytest used the wrong environment. Use uv run pytest so dependencies resolve from the project environment." \
+  --memory-type feedback \
   --tag testing
 ```
 
 Fields:
 
-- `--situation`: when this memory should be retrieved
-- `--lesson`: what was learned
-- `--action`: what the agent should do next time
-- `--tag`: optional repeated tag filter value
+- `--when-useful`: the recall cue — when this memory should be retrieved
+- `--details`: the memory body — what was learned and how to apply it
+- `--memory-type`: one of `user` | `feedback` | `project` | `reference` (see
+  [Memory Types](#memory-types)); omit to leave it untyped
+- `--tag`: optional repeated tag value
+- `--project`: repo scope for this memory; omit for a global memory
 - `--root`: optional memory store root, default `.memory-mcp`
 
 ### `search`

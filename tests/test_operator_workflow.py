@@ -53,7 +53,7 @@ def test_operator_status_aggregates_runtime_counts(tmp_path) -> None:
             source=MemorySource(
                 kind="pipeline_candidate",
                 creation_reason="Test setup.",
-                extra={"evidence_summary": "User correction.", "category": "testing"},
+                extra={"evidence_summary": "User correction."},
             ),
         )
     )
@@ -92,7 +92,7 @@ def test_operator_process_runs_events_sessions_and_extraction(tmp_path) -> None:
                     situation="When running tests in this repo.",
                     lesson="Direct pytest uses the wrong environment.",
                     action="Use uv run pytest.",
-                    category="durable_workflow",
+                    memory_type="project",
                     confidence=0.8,
                     evidence_event_ids=[event.id],
                     evidence_summary="The user gave the durable test command.",

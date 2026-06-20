@@ -20,6 +20,7 @@ def test_mcp_service_contracts(tmp_path) -> None:
         store,
         when_useful="When running tests in this repo.",
         details="Direct pytest used the wrong environment. Use uv run pytest.",
+        memory_type="feedback",
         tags=["testing"],
         source={"kind": "manual"},
     )
@@ -28,6 +29,8 @@ def test_mcp_service_contracts(tmp_path) -> None:
     assert created["memory"]["details"] == (
         "Direct pytest used the wrong environment. Use uv run pytest."
     )
+    # M19: memory_type round-trips through create and is surfaced on search.
+    assert created["memory"]["memory_type"] == "feedback"
 
     found = memory_search(
         store,
@@ -37,6 +40,7 @@ def test_mcp_service_contracts(tmp_path) -> None:
         event_context={"project": "/repo", "session_id": "session-1"},
     )
     assert found["memories"][0]["id"] == memory_id
+    assert found["memories"][0]["memory_type"] == "feedback"
     assert "retrieval_reason" in found["memories"][0]
     assert "feedback_guidance" in found
     assert "actually considered" in found["feedback_guidance"]

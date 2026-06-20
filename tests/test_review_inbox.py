@@ -121,6 +121,30 @@ def test_service_unread_inbox_and_manual_filter(tmp_path) -> None:
     assert [m.id for m in service.list_memories(status="active", manual=False)] == [auto.id]
 
 
+def test_service_filters_by_memory_type(tmp_path) -> None:
+    service, store = _service(tmp_path)
+    feedback = store.create_memory(
+        MemoryCreate(
+            when_useful="When running tests.",
+            details="Use uv run pytest.",
+            memory_type="feedback",
+            source=MemorySource(kind="manual"),
+        )
+    )
+    store.create_memory(
+        MemoryCreate(
+            when_useful="See the deploy runbook.",
+            details="https://example.com/runbook",
+            memory_type="reference",
+            source=MemorySource(kind="manual"),
+        )
+    )
+
+    typed = service.list_memories(status="active", memory_type="feedback")
+    assert [m.id for m in typed] == [feedback.id]
+    assert len(service.list_memories(status="active")) == 2
+
+
 def test_service_set_reviewed_archive_restore_delete(tmp_path) -> None:
     service, store = _service(tmp_path)
     m = store.create_memory(

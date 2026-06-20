@@ -19,7 +19,7 @@ class MergeProposalWorkerResult:
 class MergeProposalWorker:
     """Cluster similar pending memories and ask an LLM to propose merges.
 
-    The clustering is deterministic (category match plus lexical overlap). The
+    The clustering is deterministic (memory_type match plus lexical overlap). The
     LLM only proposes merged content; the actual merge is performed through the
     human-gated 13A primitive (`CandidateWorker.merge_candidates`), which yields
     a new `pending_review` memory. The worker never creates active memories — a
@@ -54,13 +54,13 @@ class MergeProposalWorker:
             if not proposal.should_merge:
                 declined += 1
                 continue
-            category = proposal.category or _candidate_category(cluster[0])
+            memory_type = proposal.memory_type or cluster[0].memory_type
             self.candidate_worker.merge_candidates(
                 [candidate.id for candidate in cluster],
                 MemoryCreate(
                     when_useful=proposal.situation,
                     details=compose_details(proposal.lesson, proposal.action),
-                    tags=[category] if category else [],
+                    memory_type=memory_type,
                     confidence=proposal.confidence,
                     source=MemorySource(
                         kind="pipeline_merge",
@@ -72,7 +72,7 @@ class MergeProposalWorker:
                             "situation": proposal.situation,
                             "lesson": proposal.lesson,
                             "action": proposal.action,
-                            "category": category,
+                            "memory_type": memory_type,
                         },
                     ),
                 ),
@@ -90,7 +90,7 @@ def _cluster_candidates(
     candidates: list[MemoryRecord],
     threshold: float,
 ) -> list[list[MemoryRecord]]:
-    """Single-linkage cluster by shared category and lexical overlap."""
+    """Single-linkage cluster by shared type and lexical overlap."""
 
     count = len(candidates)
     parent = list(range(count))
@@ -107,7 +107,7 @@ def _cluster_candidates(
     tokens = [_candidate_tokens(candidate) for candidate in candidates]
     for i in range(count):
         for j in range(i + 1, count):
-            if _candidate_category(candidates[i]) != _candidate_category(candidates[j]):
+            if _cluster_key(candidates[i]) != _cluster_key(candidates[j]):
                 continue
             if _jaccard(tokens[i], tokens[j]) >= threshold:
                 union(i, j)
@@ -118,11 +118,13 @@ def _cluster_candidates(
     return list(groups.values())
 
 
-def _candidate_category(candidate: MemoryRecord) -> str:
-    category = candidate.source.extra.get("category")
-    if isinstance(category, str) and category:
-        return category
-    return candidate.tags[0] if candidate.tags else ""
+def _cluster_key(candidate: MemoryRecord) -> str:
+    """Grouping key for clustering: the constrained ``memory_type`` (M19).
+
+    Untyped candidates collapse to one bucket (``""``); lexical overlap still
+    keeps unrelated ones apart."""
+
+    return candidate.memory_type or ""
 
 
 def _candidate_tokens(candidate: MemoryRecord) -> set[str]:

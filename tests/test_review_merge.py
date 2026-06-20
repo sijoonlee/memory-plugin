@@ -28,7 +28,6 @@ def _seed_candidate(
                 creation_reason="User correction.",
                 extra={
                     "evidence_summary": "User correction.",
-                    "category": "testing",
                     "source_session_segment_id": segment,
                 },
             ),
@@ -47,7 +46,6 @@ _MERGED_BODY = {
         "creation_reason": "Merged from repeated corrections.",
         "extra": {
             "evidence_summary": "User corrected the test command across sessions.",
-            "category": "testing",
         },
     },
 }

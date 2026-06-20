@@ -37,7 +37,6 @@ def _candidate(
                 extra={
                     "source_session_segment_id": segment,
                     "evidence_summary": "The user corrected the test command.",
-                    "category": "durable_workflow",
                 },
             ),
         )
@@ -56,7 +55,6 @@ def _merged_content() -> MemoryCreate:
             creation_reason="Merged from repeated test-command corrections.",
             extra={
                 "evidence_summary": "The user corrected the test command across sessions.",
-                "category": "durable_workflow",
             },
         ),
     )

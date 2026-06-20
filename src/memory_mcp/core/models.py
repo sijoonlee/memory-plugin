@@ -16,6 +16,9 @@ MemoryStatus = Literal[
     "merged",
     "archived",
 ]
+# Constrained 4-value taxonomy (M19). ``None`` means untyped (e.g. legacy rows,
+# or a manual memory the caller didn't classify) — no backfill is performed.
+MemoryType = Literal["user", "feedback", "project", "reference"]
 MemoryFeedbackSignal = Literal[
     "retrieved",
     "used",
@@ -47,6 +50,9 @@ class MemoryCreate(BaseModel):
     # cue, and the ``memory_get`` trigger. ``details`` is the free-form body.
     when_useful: str
     details: str
+    # Constrained taxonomy (M19): the kind of thing this memory is. Set by the
+    # extractor's classifier or supplied on manual create; ``None`` = untyped.
+    memory_type: MemoryType | None = None
     tags: list[str] = Field(default_factory=list)
     source: MemorySource = Field(default_factory=MemorySource)
     confidence: float = Field(default=0.7, ge=0.0, le=1.0)

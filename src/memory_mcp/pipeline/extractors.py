@@ -5,7 +5,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Literal, Protocol, TypeVar
+from typing import Protocol, TypeVar
 
 # Bound the extraction prompt so it cannot exceed the model's context window and
 # fail the whole segment: cap each event's payload, and cap the total events
@@ -16,15 +16,7 @@ _MAX_PROMPT_EVENTS_CHARS = 120_000
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from memory_mcp.core.events import EventRecord, SessionSegmentRecord
-from memory_mcp.core.models import MemoryRecord
-
-MemoryCandidateCategory = Literal[
-    "clue_location",
-    "external_context",
-    "user_correction",
-    "durable_workflow",
-    "repeated_pitfall",
-]
+from memory_mcp.core.models import MemoryRecord, MemoryType
 
 
 class ExtractedMemoryCandidate(BaseModel):
@@ -33,7 +25,7 @@ class ExtractedMemoryCandidate(BaseModel):
     situation: str = Field(min_length=1)
     lesson: str = Field(min_length=1)
     action: str = Field(min_length=1)
-    category: MemoryCandidateCategory
+    memory_type: MemoryType
     confidence: float = Field(ge=0.0, le=1.0)
     evidence_event_ids: list[str]
     evidence_summary: str = Field(min_length=1)
@@ -62,7 +54,7 @@ class MergeProposalResult(BaseModel):
     situation: str = ""
     lesson: str = ""
     action: str = ""
-    category: MemoryCandidateCategory | None = None
+    memory_type: MemoryType | None = None
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     evidence_summary: str = ""
 
@@ -74,10 +66,10 @@ class MergeProposalResult(BaseModel):
                 for name in ("situation", "lesson", "action", "evidence_summary")
                 if not getattr(self, name).strip()
             ]
-            if missing or self.category is None:
+            if missing or self.memory_type is None:
                 raise ValueError(
                     "merged content is required when should_merge is true: "
-                    + ", ".join(missing + ([] if self.category else ["category"]))
+                    + ", ".join(missing + ([] if self.memory_type else ["memory_type"]))
                 )
         return self
 
@@ -301,13 +293,16 @@ def build_extraction_prompt(
         "You are extracting durable memory candidates for a local agent memory system.\n"
         "Return only JSON that matches the provided output schema.\n\n"
         "A memory must be a compact reusable lesson, not a transcript summary.\n"
-        "Create candidates only for durable, future-useful facts such as:\n"
-        "- clue_location: where a useful code/config/document clue was found after search\n"
-        "- external_context: human-provided context that filled a knowledge gap\n"
-        "- user_correction: durable correction to an agent assumption or behavior\n"
-        "- durable_workflow: project-specific command, workflow, or convention\n"
-        "- repeated_pitfall: mistake or trap likely to recur\n\n"
-        "Skip candidates that are vague, unresolved, only temporary, or not reusable.\n"
+        "Classify every candidate into exactly one memory_type:\n"
+        "- user: who the user is — their role, expertise, and durable preferences.\n"
+        "- feedback: how the agent should work — corrections and confirmed approaches; "
+        "include why it matters and how to apply it.\n"
+        "- project: ongoing work, goals, or constraints that are NOT derivable from the "
+        "code or git history.\n"
+        "- reference: a pointer to an external resource (URL, doc, dashboard, ticket).\n\n"
+        "If a candidate does not fit one of these types cleanly, skip it — it is "
+        "usually junk. Also skip candidates that are vague, unresolved, only temporary, "
+        "or not reusable.\n"
         "If there is no durable memory, return an empty candidates array with no_memory_reason.\n"
         "Use only event ids present in the input as evidence_event_ids.\n\n"
         "<session_events_json>\n"
@@ -334,7 +329,7 @@ def build_merge_prompt(*, candidates: list[MemoryRecord]) -> str:
             "id": candidate.id,
             "when_useful": candidate.when_useful,
             "details": candidate.details,
-            "category": (candidate.tags[0] if candidate.tags else None),
+            "memory_type": candidate.memory_type,
             "confidence": candidate.confidence,
             "evidence_summary": candidate.source.extra.get("evidence_summary", ""),
         }
@@ -350,7 +345,7 @@ def build_merge_prompt(*, candidates: list[MemoryRecord]) -> str:
         "that covers all of them.\n"
         "If they are genuinely distinct, set should_merge to false and explain "
         "why in reason; leave the content fields empty.\n"
-        "When merging, pick the single best category and a confidence reflecting "
+        "When merging, pick the single best memory_type and a confidence reflecting "
         "the combined evidence.\n\n"
         "<candidates_json>\n"
         f"{json.dumps(payload, indent=2)}\n"

@@ -11,6 +11,7 @@ _MEMORY_SUMMARY_FIELDS = (
     "id",
     "when_useful",
     "details",
+    "memory_type",
     "tags",
     "project",
     "status",
@@ -48,6 +49,7 @@ def memory_search(
                 "id": result.memory.id,
                 "when_useful": result.memory.when_useful,
                 "details": result.memory.details,
+                "memory_type": result.memory.memory_type,
                 "tags": result.memory.tags,
                 "score": result.memory.score,
                 "confidence": result.memory.confidence,
@@ -99,6 +101,7 @@ def memory_create(
     store: LocalMemoryStore,
     when_useful: str,
     details: str,
+    memory_type: str | None = None,
     tags: list[str] | None = None,
     source: dict[str, Any] | None = None,
     project: str | None = None,
@@ -107,6 +110,7 @@ def memory_create(
         MemoryCreate(
             when_useful=when_useful,
             details=details,
+            memory_type=memory_type,  # type: ignore[arg-type]
             tags=tags or [],
             source=MemorySource.model_validate(source or {"kind": "manual"}),
             project=project,

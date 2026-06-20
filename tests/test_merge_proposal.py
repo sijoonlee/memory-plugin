@@ -25,12 +25,12 @@ def _worker(tmp_path, proposer) -> tuple[MergeProposalWorker, CandidateWorker, L
     return worker, candidate_worker, memory_store
 
 
-def _seed(worker: CandidateWorker, *, lesson: str, action: str, category: str, evidence: list[str]) -> str:
+def _seed(worker: CandidateWorker, *, lesson: str, action: str, memory_type: str, evidence: list[str]) -> str:
     record = worker.create_candidate(
         MemoryCreate(
             when_useful="When running tests in this repo.",
             details=f"{lesson} {action}",
-            tags=[category],
+            memory_type=memory_type,
             confidence=0.7,
             source=MemorySource(
                 kind="pipeline_candidate",
@@ -39,7 +39,6 @@ def _seed(worker: CandidateWorker, *, lesson: str, action: str, category: str, e
                 extra={
                     "source_session_segment_id": f"seg_{evidence[0]}",
                     "evidence_summary": "A test-command correction.",
-                    "category": category,
                 },
             ),
         )
@@ -54,7 +53,7 @@ def _merge_result() -> MergeProposalResult:
         situation="When running tests in this repo.",
         lesson="Run tests through the project environment.",
         action="Use uv run pytest so dependencies resolve.",
-        category="durable_workflow",
+        memory_type="project",
         confidence=0.85,
         evidence_summary="The user corrected the test command across sessions.",
     )
@@ -62,8 +61,8 @@ def _merge_result() -> MergeProposalResult:
 
 def test_agent_merges_cluster_into_pending_candidate_without_active_memory(tmp_path) -> None:
     worker, candidates, memory_store = _worker(tmp_path, StaticMergeProposer(_merge_result()))
-    a = _seed(candidates, lesson="pytest fails directly in tests.", action="use uv run pytest", category="durable_workflow", evidence=["evt_1"])
-    b = _seed(candidates, lesson="pytest dependency errors in tests.", action="use uv run pytest tests", category="durable_workflow", evidence=["evt_2"])
+    a = _seed(candidates, lesson="pytest fails directly in tests.", action="use uv run pytest", memory_type="project", evidence=["evt_1"])
+    b = _seed(candidates, lesson="pytest dependency errors in tests.", action="use uv run pytest tests", memory_type="project", evidence=["evt_2"])
 
     result = worker.run_once(limit=5)
 
@@ -87,8 +86,8 @@ def test_agent_merges_cluster_into_pending_candidate_without_active_memory(tmp_p
 def test_agent_declines_when_proposal_says_no(tmp_path) -> None:
     decline = MergeProposalResult(should_merge=False, reason="These are distinct lessons.")
     worker, candidates, memory_store = _worker(tmp_path, StaticMergeProposer(decline))
-    a = _seed(candidates, lesson="pytest fails in tests.", action="use uv run pytest", category="durable_workflow", evidence=["evt_1"])
-    b = _seed(candidates, lesson="pytest errors in tests.", action="use uv run pytest now", category="durable_workflow", evidence=["evt_2"])
+    a = _seed(candidates, lesson="pytest fails in tests.", action="use uv run pytest", memory_type="project", evidence=["evt_1"])
+    b = _seed(candidates, lesson="pytest errors in tests.", action="use uv run pytest now", memory_type="project", evidence=["evt_2"])
 
     result = worker.run_once(limit=5)
 
@@ -102,8 +101,8 @@ def test_agent_declines_when_proposal_says_no(tmp_path) -> None:
 
 def test_dissimilar_candidates_are_not_clustered(tmp_path) -> None:
     worker, candidates, _ = _worker(tmp_path, StaticMergeProposer(_merge_result()))
-    _seed(candidates, lesson="run tests with uv.", action="uv run pytest", category="durable_workflow", evidence=["evt_1"])
-    _seed(candidates, lesson="deploy uses a blue green flip.", action="run the deploy script", category="external_context", evidence=["evt_2"])
+    _seed(candidates, lesson="run tests with uv.", action="uv run pytest", memory_type="project", evidence=["evt_1"])
+    _seed(candidates, lesson="deploy uses a blue green flip.", action="run the deploy script", memory_type="reference", evidence=["evt_2"])
 
     result = worker.run_once(limit=5)
 
@@ -113,12 +112,12 @@ def test_dissimilar_candidates_are_not_clustered(tmp_path) -> None:
     assert len(candidates.list_candidates(status="pending_review")) == 2
 
 
-def test_cluster_groups_only_same_category_overlap(tmp_path) -> None:
+def test_cluster_groups_only_same_type_overlap(tmp_path) -> None:
     worker, candidates, _ = _worker(tmp_path, StaticMergeProposer(_merge_result()))
-    a = _seed(candidates, lesson="run tests with uv pytest.", action="uv run pytest", category="durable_workflow", evidence=["evt_1"])
-    b = _seed(candidates, lesson="run tests using uv pytest.", action="uv run pytest tests", category="durable_workflow", evidence=["evt_2"])
-    # Same words but a different category must not join the cluster.
-    _seed(candidates, lesson="run tests with uv pytest.", action="uv run pytest", category="repeated_pitfall", evidence=["evt_3"])
+    a = _seed(candidates, lesson="run tests with uv pytest.", action="uv run pytest", memory_type="project", evidence=["evt_1"])
+    b = _seed(candidates, lesson="run tests using uv pytest.", action="uv run pytest tests", memory_type="project", evidence=["evt_2"])
+    # Same words but a different memory_type must not join the cluster.
+    _seed(candidates, lesson="run tests with uv pytest.", action="uv run pytest", memory_type="feedback", evidence=["evt_3"])
 
     pending = candidates.list_candidates(status="pending_review")
     clusters = [c for c in _cluster_candidates(pending, 0.5) if len(c) >= 2]
