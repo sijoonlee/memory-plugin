@@ -104,6 +104,28 @@ class EventStore:
             ).fetchall()
         return [_row_to_event(row) for row in rows]
 
+    def get_event(self, event_id: str) -> EventRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM events WHERE id = ?", (event_id,)
+            ).fetchone()
+        return _row_to_event(row) if row is not None else None
+
+    def delete_event(self, event_id: str) -> bool:
+        """Permanently remove one raw event row. Returns ``False`` for unknown id.
+
+        Session segments are derived aggregates, not foreign keys, so a deleted
+        event leaves stale counts until ``rebuild-sessions`` replays the log.
+        """
+
+        with self._connect() as conn:
+            return (
+                conn.execute(
+                    "DELETE FROM events WHERE id = ?", (event_id,)
+                ).rowcount
+                > 0
+            )
+
     def list_events_after(
         self,
         created_at: datetime | None,

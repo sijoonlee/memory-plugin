@@ -1,6 +1,7 @@
 const state = {
   selectedId: null,
   segments: {},
+  view: "unread",
 };
 
 const statusEl = document.querySelector("#status");
@@ -19,78 +20,84 @@ filtersEl.addEventListener("change", (event) => {
   }
 });
 
+const MEMORY_QUERIES = {
+  unread: "status=active&is_reviewed=false",
+  all: "status=active",
+  manual: "status=active&manual=true",
+  archived: "status=archived",
+};
+
+// Entry point + dropdown router. Kept the name ``loadCandidates`` so the existing
+// refresh callers (segments, retry) keep working; it now routes to the memory
+// manager (M18-3) or the segment views.
 async function loadCandidates() {
-  const params = new URLSearchParams(new FormData(filtersEl));
-  const status = params.get("status");
-  if (status && status.startsWith("segment:")) {
+  const status = new FormData(filtersEl).get("status") || "memory:unread";
+  if (status.startsWith("segment:")) {
     const segmentStatus = status.slice("segment:".length);
     return loadSegments(segmentStatus === "all" ? "" : segmentStatus);
   }
-  if (status === "active") {
-    return loadMemories();
-  }
-  setStatus("Loading candidates");
-  for (const [key, value] of [...params.entries()]) {
-    if (!value) params.delete(key);
-  }
-  const data = await request(`/api/candidates?${params.toString()}`);
-  listEl.innerHTML = "";
-  data.candidates.forEach((candidate) => {
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = `candidate-row ${candidate.id === state.selectedId ? "active" : ""}`;
-    row.innerHTML = `
-      <div class="row-title">${escapeHtml(candidate.details)}</div>
-      <div class="row-meta">${escapeHtml(candidateCategory(candidate))} · ${candidate.confidence.toFixed(2)} · ${escapeHtml(candidate.status)}</div>
-      <div class="row-meta">${escapeHtml(candidate.when_useful)}</div>
-    `;
-    row.addEventListener("click", () => selectCandidate(candidate.id));
-    listEl.append(row);
-  });
-  setStatus(`${data.candidates.length} candidate${data.candidates.length === 1 ? "" : "s"}`);
+  const view = status.startsWith("memory:") ? status.slice("memory:".length) : "unread";
+  return loadMemories(view);
 }
 
-async function loadMemories() {
-  setStatus("Loading active memories");
-  const data = await request("/api/memories");
+async function loadMemories(view = "unread") {
+  const query = MEMORY_QUERIES[view] || MEMORY_QUERIES.unread;
+  state.view = view;
+  setStatus("Loading memories");
+  const data = await request(`/api/memories?${query}`);
   listEl.innerHTML = "";
   data.memories.forEach((memory) => {
     const row = document.createElement("button");
     row.type = "button";
     row.className = `candidate-row ${memory.id === state.selectedId ? "active" : ""}`;
+    const badges = [];
+    if (!memory.is_reviewed) badges.push("unread");
+    if (memory.source && memory.source.kind === "manual") badges.push("manual");
+    const meta = `${escapeHtml(memory.status)} · score ${memory.score.toFixed(2)}${
+      badges.length ? " · " + badges.join(" · ") : ""
+    }`;
     row.innerHTML = `
       <div class="row-title">${escapeHtml(memory.details)}</div>
-      <div class="row-meta">memory · score ${memory.score.toFixed(2)} · ${escapeHtml(memory.status)}</div>
+      <div class="row-meta">${meta}</div>
       <div class="row-meta">${escapeHtml(memory.when_useful)}</div>
     `;
     row.addEventListener("click", () => selectMemory(memory.id));
     listEl.append(row);
   });
   const count = data.memories.length;
-  setStatus(`${count} active memor${count === 1 ? "y" : "ies"}`);
+  setStatus(`${count} memor${count === 1 ? "y" : "ies"} (${view})`);
 }
 
 async function selectMemory(memoryId) {
   state.selectedId = memoryId;
   const data = await request(`/api/memories/${memoryId}`);
   renderMemoryDetail(data.memory);
-  loadMemories();
+  loadMemories(state.view);
 }
 
 function renderMemoryDetail(memory) {
+  const archived = memory.status === "archived";
   detailEl.innerHTML = `
     <div class="detail-grid">
       <div class="panel">
-        <h2>Active Memory (read-only)</h2>
+        <h2>Memory</h2>
         ${readonlyField("When Useful", memory.when_useful)}
         ${readonlyField("Details", memory.details)}
         ${readonlyField("Tags", (memory.tags || []).join(", "))}
-        <div class="meta">Edits are disabled for active memories.</div>
+        <div class="actions">
+          <button type="button" id="toggleReviewed">${memory.is_reviewed ? "Mark unread" : "Mark read"}</button>
+          ${
+            archived
+              ? `<button type="button" id="restoreMemory">Restore</button>`
+              : `<button type="button" id="archiveMemory">Archive</button>`
+          }
+          <button type="button" class="danger" id="deleteMemory">Delete</button>
+        </div>
       </div>
       <div class="panel">
         <h2>Stats</h2>
         <div class="meta">${escapeHtml(memory.id)}</div>
-        <div class="meta">status: ${escapeHtml(memory.status)}</div>
+        <div class="meta">status: ${escapeHtml(memory.status)} · ${memory.is_reviewed ? "read" : "unread"}</div>
         <div class="meta">score: ${memory.score.toFixed(3)} · confidence: ${memory.confidence.toFixed(2)}</div>
         <div class="meta">retrieved: ${memory.retrieval_count} · used: ${memory.use_count}</div>
         <div class="meta">feedback: +${memory.positive_feedback_count} / -${memory.negative_feedback_count}</div>
@@ -98,6 +105,48 @@ function renderMemoryDetail(memory) {
       </div>
     </div>
   `;
+
+  document.querySelector("#toggleReviewed").addEventListener("click", () => {
+    runAction(() => setReviewed(memory.id, !memory.is_reviewed));
+  });
+  const archiveBtn = document.querySelector("#archiveMemory");
+  if (archiveBtn) {
+    archiveBtn.addEventListener("click", () => runAction(() => archiveMemory(memory.id)));
+  }
+  const restoreBtn = document.querySelector("#restoreMemory");
+  if (restoreBtn) {
+    restoreBtn.addEventListener("click", () => runAction(() => restoreMemory(memory.id)));
+  }
+  document.querySelector("#deleteMemory").addEventListener("click", () => {
+    runAction(() => deleteMemory(memory.id));
+  });
+}
+
+async function setReviewed(memoryId, value) {
+  await request(`/api/memories/${memoryId}/reviewed`, {
+    method: "POST",
+    body: JSON.stringify({ value }),
+  });
+  await selectMemory(memoryId);
+}
+
+async function archiveMemory(memoryId) {
+  await request(`/api/memories/${memoryId}/archive`, { method: "POST" });
+  state.selectedId = null;
+  detailEl.innerHTML = `<div class="empty">Archived.</div>`;
+  await loadMemories(state.view);
+}
+
+async function restoreMemory(memoryId) {
+  await request(`/api/memories/${memoryId}/restore`, { method: "POST" });
+  await selectMemory(memoryId);
+}
+
+async function deleteMemory(memoryId) {
+  await request(`/api/memories/${memoryId}`, { method: "DELETE" });
+  state.selectedId = null;
+  detailEl.innerHTML = `<div class="empty">Deleted.</div>`;
+  await loadMemories(state.view);
 }
 
 function readonlyField(label, value) {

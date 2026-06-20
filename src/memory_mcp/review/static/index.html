@@ -18,12 +18,12 @@
           <label>
             Status
             <select name="status">
-              <option value="pending_review">Pending</option>
-              <option value="">All</option>
-              <option value="approved">Approved</option>
-              <option value="rejected">Rejected</option>
-              <option value="merged">Merged</option>
-              <option value="active">Active Memories (read-only)</option>
+              <optgroup label="Memories">
+                <option value="memory:unread">Unread inbox</option>
+                <option value="memory:all">All active</option>
+                <option value="memory:manual">Manual</option>
+                <option value="memory:archived">Archived</option>
+              </optgroup>
               <optgroup label="Segments">
                 <option value="segment:skipped">Segment: skipped</option>
                 <option value="segment:failed">Segment: failed</option>
@@ -54,6 +54,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=m18"></script>
+    <script src="/static/app.js?v=m18-3"></script>
   </body>
 </html>

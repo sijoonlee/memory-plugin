@@ -73,7 +73,7 @@ def test_review_server_updates_candidate(tmp_path) -> None:
     assert payload["confidence"] == 0.75
 
 
-def test_review_server_lists_active_memories_readonly(tmp_path) -> None:
+def test_review_server_lists_active_memories(tmp_path) -> None:
     root = tmp_path / "memory"
     record = LocalMemoryStore(root, FakeEmbedder()).create_memory(
         MemoryCreate(
@@ -90,10 +90,40 @@ def test_review_server_lists_active_memories_readonly(tmp_path) -> None:
     detail = client.get(f"/api/memories/{record.id}").json()
     assert detail["memory"]["details"].startswith("pytest used the wrong environment.")
 
-    # Active memories are read-only: the detail route rejects writes (405) and
-    # no approve/reject mutation routes exist (404).
-    assert client.patch(f"/api/memories/{record.id}", json={}).status_code == 405
-    assert client.post(f"/api/memories/{record.id}/approve", json={}).status_code == 404
+
+def test_review_server_memory_manager_actions(tmp_path) -> None:
+    root = tmp_path / "memory"
+    record = LocalMemoryStore(root, FakeEmbedder()).create_memory(
+        MemoryCreate(
+            when_useful="When configuring CI caching.",
+            details="Cache the uv directory between runs.",
+            tags=["ci"],
+        )
+    )
+    client = TestClient(create_app(root))
+
+    # Starts unread → shows in the unread inbox.
+    inbox = client.get("/api/memories?status=active&is_reviewed=false").json()
+    assert [m["id"] for m in inbox["memories"]] == [record.id]
+
+    # Mark read.
+    reviewed = client.post(
+        f"/api/memories/{record.id}/reviewed", json={"value": True}
+    ).json()
+    assert reviewed["memory"]["is_reviewed"] is True
+    assert client.get("/api/memories?status=active&is_reviewed=false").json()["memories"] == []
+
+    # Archive (soft delete) → out of active, into archived.
+    archived = client.post(f"/api/memories/{record.id}/archive").json()
+    assert archived["memory"]["status"] == "archived"
+    assert client.get("/api/memories?status=active").json()["memories"] == []
+    assert [m["id"] for m in client.get("/api/memories?status=archived").json()["memories"]] == [record.id]
+
+    # Restore, then hard delete.
+    assert client.post(f"/api/memories/{record.id}/restore").json()["memory"]["status"] == "active"
+    deleted = client.request("DELETE", f"/api/memories/{record.id}").json()
+    assert deleted == {"deleted": True, "memory_id": record.id}
+    assert client.get("/api/memories?status=active").json()["memories"] == []
 
 
 def test_review_server_reject_requires_reason(tmp_path) -> None:

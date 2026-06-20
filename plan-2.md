@@ -13,14 +13,17 @@ on the agent to remember to search.
 
 ---
 
-## Milestone 18 — Storage layer: unify the model, then draw the adapter boundary
+## Milestone 18 — Storage layer: unify the model + memory lifecycle
 
-Two sub-steps. **18-1 unifies the candidate and memory into one model** (a candidate
-is a memory with `status="pending_review"`); **18-2 draws the storage-protocol seam**
-so that one model can move to a shared backend in M22 while events stay local. 18-1
-lands first because it decides *what* the 18-2 protocol wraps. Data does not need to
-be migrated — the store has been experimental so far, so the existing `.memory-mcp`
-can be recreated from scratch.
+Two live sub-steps on the unified memory model. **18-1 unifies the candidate and memory
+into one model** (a candidate is a memory with `status="pending_review"`); **18-3 drops
+the approval gate** — extraction creates `active` memories directly, with a read/unread
+inbox + archive/delete for post-hoc curation. **18-2 (storage adapter boundary) is
+dropped** — see its tombstone below. Data does not need to be migrated — the store has
+been experimental so far, so the existing `.memory-mcp` can be recreated from scratch.
+
+> Status: 18-1 and 18-3 implemented. 18-2 dropped. **18-4** (optional map-reduce
+> extraction) is specced at the **bottom of this file**.
 
 ### Milestone 18-1 — Unify candidate & memory into one model
 
@@ -89,46 +92,111 @@ Candidate-only provenance lives in `MemorySource`, which already carries
   memory; `when_useful` + `details` populated; dedupe still merges/rejects.
 - `memory_search` excludes `pending_review`; the M20 catalog lists only `active`.
 
-### Milestone 18-2 — Storage adapter boundary (M22 prep)
+### Milestone 18-2 — Storage adapter boundary (DROPPED)
+
+**Dropped — the direction changed from *replacement* to *additive*.** 18-2 was a
+`MemoryStore` protocol seam whose sole purpose was to let M22 *swap* `LocalMemoryStore`
+for a remote backend without forking callers. But the shared server is no longer a
+replacement for the local store — it is an **additional** destination you optionally
+push memories to (and later pull from, into the local store). So:
+
+- the local store stays concrete (there is only ever one local store — nothing to
+  abstract over);
+- the shared server is a separate **client** (`push` / later `pull` + auth), not an
+  alternate `MemoryStore` implementation with the same CRUD/search surface;
+- even the pull path caches shared memories *into the local store* (`origin=shared`
+  rows), so retrieval stays a single local search — no federated-query interface needed.
+
+What's actually needed instead — a `SharedMemoryClient` (push-first, optional pull) —
+lives in the shared-server work (M22), not in a local storage-abstraction milestone.
+
+---
+
+### Milestone 18-3 — Drop the approval gate: auto-active memories + read/unread + archive
 
 #### Goal
-After 18-1 there is **one** model and **one** store, so draw a single storage-protocol
-seam: a `MemoryStore` protocol that `LocalMemoryStore` satisfies, so the whole
-memory + candidate dataset can move to a shared backend in M22 (Postgres/pgvector or
-hosted) while **events** stay local in `EventStore`. That swap is only cheap if callers
-depend on the *interface*, not on `LocalMemoryStore` concretely — this is that
-interface.
+Stop gating extracted memories behind manual approval. Extraction creates an `active`
+memory directly (it's immediately searchable); curation moves from a *pre*-approval
+queue to *post-hoc* management. The "what haven't I looked at?" workflow is preserved
+by a separate **read/unread** flag, not by withholding the memory from retrieval.
 
-#### What changed vs the original adapter plan
-18-1 makes a separate `CandidateStore` unnecessary: candidates are `pending_review`
-rows in the memory store, so there is **no** `memory_candidates` table to relocate out
-of `events.sqlite`. One protocol, not two; no table move.
+Rationale: approval queues rot in practice, and the extractor already self-gates (it
+only emits a lesson when one exists; redaction + dedupe already run on create). A bad
+auto-memory is local-only and self-corrects via decay + delete, so the gate buys little
+for a personal store.
+
+#### Two independent axes (the key design point)
+`status` and `is_reviewed` are **orthogonal**; neither gates the other:
+
+| Axis | Values | Controls |
+| --- | --- | --- |
+| `status` | `active` ⇄ `archived` (+ `stale`/`invalid`/`superseded` from feedback) | whether it is *retrievable* (`search_memories` filters `status="active"`) |
+| `is_reviewed` | `false` (unread) / `true` (read) | the user's review inbox only — **no** effect on retrieval |
+
+So an extracted memory is `active` + `is_reviewed=false`: live for the agent
+immediately, but flagged in the user's inbox until checked. `is_reviewed` must be a
+*separate field*, never a status value (an "unread" status would fall out of search).
+
+#### Decisions (settled)
+- **Field:** `is_reviewed: bool = false`; the user toggles it (check/uncheck) — read
+  *and* unread are both explicit, reversible states. (Not auto-derived from agent
+  retrieval; `is_reviewed` means *a human looked at it*, distinct from
+  `retrieval_count`.)
+- **Manual memories** (`memory_create` via CLI/MCP) also start `is_reviewed=false`, and
+  are distinguishable by a **`manual`** filter derived from `source.kind == "manual"`
+  (vs `pipeline_candidate` for extracted) — no new field needed for origin.
+- **Unread memories surface to the agent** (intended — this is the no-gate choice).
+- **`pending_review` is retired** — the read/unread flag covers its tracking purpose.
+  Leave the approval-gate code (`approve_candidate`/`activate`/`reject`) dormant rather
+  than deleting it, so a future opt-in "review mode" stays cheap; keep the merge
+  workflow (still useful on active memories).
 
 #### Changes
-- **Protocol:** add a `MemoryStore` Protocol (new `core/protocols.py`) matching
-  `LocalMemoryStore`'s public surface (`create_memory`, `search_memories`,
-  `get_memory`, `list_memories`, `record_feedback`, `delete_memory`, the
-  pending/`activate` ops from 18-1, …); assert `LocalMemoryStore` satisfies it
-  structurally.
-- **Rewire callers** to depend on the protocol, not the concrete class — the few
-  construction sites (`cli.py`, `operator.py`, `review/service.py`,
-  `mcp_server/server.py`). `EventStore` is untouched (events stay local).
-- **Cross-store references stay opaque audit ids.** A pending memory's
-  `source.evidence_event_ids` / `source_session_segment_id` point into local event
-  data; resolved against `EventStore` only when needed (e.g. project lookup from a
-  segment). No cross-database join assumed.
+- **Model:** add `is_reviewed: bool = False` to `MemoryRecord` (`core/models.py`); a
+  denormalized `memories.is_reviewed` column + index + in-place backfill, mirroring how
+  `project` was added in M17 (existing rows backfill to `false`/unread).
+- **Generation:** `ExtractionWorker._create_candidates` calls `create_memory` (active,
+  embedded, deduped) instead of `create_pending`. Optional cheap quality knob: only
+  auto-create when extractor `confidence ≥ threshold` (deferred unless wanted).
+- **Lifecycle helpers (`core/store.py`):** `set_reviewed(id, bool)`;
+  `archive_memory(id)` (`active→archived`, status flip only — vector persists, no
+  re-embed) and `restore_memory(id)` (`archived→active`). Hard `delete_memory` (M15)
+  already exists.
+- **Review service/API:** repurpose from approval queue to memory manager — list with
+  filters (**unread** / all / manual / archived), `mark reviewed/unreviewed`, archive,
+  restore, delete. Routes: `POST /api/memories/{id}/reviewed`, `/archive`, `/restore`,
+  `DELETE /api/memories/{id}`.
+- **Review UI:** default view = **Unread inbox** (`active` + `is_reviewed=false`) with a
+  count; plus All / Manual / Archived; row actions: toggle reviewed, archive/restore,
+  delete. (Inline **edit** of an active memory is deferred — it requires re-embedding
+  the vector, unlike archive/delete which are status-only.)
+- **Operator status (`operator.py`):** add an `unread` count; move `archived` to the
+  memory side; drop the now-unused `pending_review`/`rejected` buckets.
+- **MCP:** `candidate_list` becomes vestigial — repurpose to a `memory_list` filter
+  (e.g. unread) or remove; surface the unread count in `memory_status`.
 
 #### Files
-`core/protocols.py` (new), `core/store.py` (conform), `cli.py`, `operator.py`,
-`review/service.py`, `mcp_server/server.py`, tests.
+`core/models.py`, `core/store.py`, `pipeline/workers/extraction_worker.py`,
+`review/service.py`, `review/server.py`, `review/static/*`, `operator.py`,
+`mcp_server/service.py` + `server.py`, `cli.py`, tests, `README.md`.
 
 #### Verification
-- `uv run pytest` green; no behavior change to retrieval/scoring/review.
-- A test-only in-memory `MemoryStore` fake substitutes through the same callers
-  (proves swappability for M22).
+- Extraction produces an `active`, `is_reviewed=false` memory that is immediately
+  returned by `search_memories`; the unread inbox lists it; toggling `is_reviewed`
+  does not change retrievability.
+- `archive_memory` removes it from search and the default view but keeps the row;
+  `restore_memory` brings it back without re-embedding; `delete_memory` is permanent.
+- `manual` filter surfaces `source.kind="manual"` memories; both manual and extracted
+  start unread.
 
-> Sequencing: 18-1 → 18-2, both **M22 prep** and independent of the read-side
-> taxonomy/catalog/hook work (M19–M21). Land before M22.
+#### Defer
+- **Share / shared server** (publish a memory to a team server): out of scope here;
+  revisit when the time is right. The likely shape (settled in discussion): local-first
+  and private by default — events never leave; only explicitly selected memories
+  publish; a thin shared registry consolidates published memories (dedup/contributor
+  count); local may later *pull* shared memories read-only with conflict resolved at
+  read time (local wins). Candidate-level pooling was considered and set aside in favor
+  of this memory-level, opt-in model.
 
 ---
 
@@ -323,44 +391,153 @@ path** — formation, storage, and the extractor are untouched except for M19's 
 
 ---
 
-## Milestone 22: Shared Online Memory Server (BE + FE)
+## Milestone 22: Shared memory registry (additive, local-first)
 
-This milestone graduates Memory MCP from a single-user local tool into a shared,
-online service used by multiple developers. It is explicitly post-V1 (see
-"Multi-user cloud service" under Non-Goals For V1) and should not begin until the
-local MVP and adapter/packaging milestones are stable.
+**Reframed from "graduate local into a cloud service" (replacement) to "add an optional
+shared registry alongside the local store" (additive).** The local store stays the
+source of truth and the private working set; the shared server is a thin registry you
+optionally **push** selected memories to, and later optionally **pull** from. It is
+post-V1 and should not begin until the local MVP is stable.
 
-Guiding principle: keep all behavior in the service/store layer so the MCP server,
-CLI, and a new HTTP backend are thin front doors over the same logic. Do not push
-agent- or transport-specific assumptions into core retrieval, scoring, or review.
+### Privacy invariant (the whole point)
+**Private by default; local-first; sharing is explicit, per-memory, never automatic.**
+Enforced by architecture, not policy:
 
-- backend service:
-  - extract a backend API (REST or GraphQL) over the existing service functions
-    (`mcp_server/service.py`, `operator.py`) without forking business logic
-  - replace file-based SQLite + LanceDB with a concurrent server datastore
-    (for example Postgres + pgvector or a hosted vector store)
-  - keep a migration/export path from local `.memory-mcp` stores into the server
-    (reuse JSONL import/export)
-  - make the MCP server connect to the backend (remote MCP over HTTP, or MCP as a
-    thin client of the backend API) instead of reading local files directly
-- identity, scoping, and access control:
-  - add developer/user identity on events, feedback, memories, and candidates
-  - extend scoping beyond project to support per-user, per-project, and explicitly
-    shared memories
-  - add authentication and authorization (who can read, create, approve, delete)
-  - preserve provenance and audit trails across users
-- multi-writer correctness:
-  - replace single-writer file assumptions with concurrent-safe transactions
-  - handle concurrent dedupe-on-create and candidate approval without races
-- frontend:
-  - build a dedicated web UI for search, browse, candidate review, and store health
-  - reuse the read-only inspection contracts (`memory_status`, `memory_list`,
-    `candidate_list`) as the first read API, and the review service for actions
-  - treat the local review UI (Milestone 5A) as throwaway once the FE exists
-- operations:
-  - deployment, backups, observability, and rate limiting for a shared service
-  - privacy controls and tenant isolation; redaction (Milestone 11) becomes mandatory
-- compatibility:
-  - keep the local single-user mode working for offline/solo use
-  - keep the normal operator workflow verbs (`status` / `process` / `review`)
-    available against the backend
+- the local pipeline (`events → memory → archive/delete`) never touches the network;
+- **events never leave the machine** — only `active`, human-kept, redacted *memories*
+  are even eligible to share;
+- nothing is published except what the user explicitly selects, one action at a time;
+- a `never_share` flag can pin a memory permanently local.
+
+### Shape: thin registry, not a fat backend
+The server holds **only published memories** + author/identity + access control +
+server-side dedup. **No events, no candidates, no extraction server-side** — the
+privacy-bearing pipeline stays local-only. The local-side component is a
+`SharedMemoryClient` (push first, pull later), *not* an alternate `MemoryStore`
+(this is why [the M18-2 adapter seam](#milestone-18-2--storage-adapter-boundary-dropped)
+was dropped).
+
+```
+LOCAL (private, full pipeline)            SHARED REGISTRY (thin)
+  events ──never leaves──
+  memories (active/archived) ──push(opt-in, redacted, no local ids)──►  published memories
+       ▲                                                                 + author/identity
+       └────── pull (optional): cache as origin=shared, read-only ◄──    + access control
+  retrieval = local search over (local ∪ cached shared)                  + server-side dedup
+```
+
+### Push (first increment)
+- Explicit per-memory **publish** action over `active` memories (review UI + CLI/MCP).
+- **Mandatory redaction + a human-visible preview/diff** of exactly what bytes go up.
+- Strip local provenance: send `evidence_summary` text, **not** `evidence_event_ids` /
+  `source_session_segment_id` (they only resolve against the local `EventStore`).
+- Local marker `shared_at` / `shared_memory_id` so the UI knows what's published;
+  unshare/retract is reversible (with audit).
+- **Standardization without raw events:** server runs dedup-on-publish — a near-duplicate
+  of an existing shared memory consolidates (attaches a contributor) instead of creating
+  a fork; contributor count ranks canonical memories. (Optional steward curation.)
+
+### Pull (deferred second increment — this is where the complexity lives)
+- Subscribe to shared scopes (team/project); cache pulled memories **into the local
+  store** as `origin=shared`, **read-only**. Retrieval stays a single local search over
+  the union — offline-capable, no per-query network call.
+- **Conflict resolved at read time, not storage time** (storage keeps two non-overlapping
+  lanes: writable `origin=local`, read-only `origin=shared`, keyed by server id):
+  - *overlap / near-duplicate*: advisory only — collapse at retrieval, don't merge;
+  - *contradiction*: surface both with origin, never auto-supersede across the boundary;
+  - *staleness*: shared memories carry a `version`; refresh replaces the cached row;
+    local feedback survives (kept in `feedback_events`).
+  - **Tie-break: local wins** — personal context beats team-authoritative, so the team
+    can't silently change your agent's behavior.
+
+### Identity & access control
+- Author/owner identity on published memories; authn/authz (who can read/publish/retract).
+- Scope beyond project: per-user, per-team, explicitly-shared. Audit trail across users.
+- Server-side multi-writer correctness (concurrent publish/dedup without races).
+
+### Frontend / ops
+- A web UI for the shared registry (browse/search shared memories, contributor counts,
+  steward actions). The **local review UI stays** as the local memory manager (M18-3) —
+  it is not replaced.
+- Deployment, backups, observability, rate limiting; tenant isolation; redaction
+  (Milestone 11) becomes mandatory at the publish boundary.
+
+### Phasing
+1. **Push-only** — publish + redaction preview + server dedup-on-publish + contributor
+   count. Delivers the privacy-respecting sharing model for a fraction of the cost.
+2. **Pull + conflict-at-read** — only if local-cache retrieval over team memories is
+   wanted (browsing the registry UI may be enough). All the conflict complexity is here.
+
+Candidate-level pooling (sending un-approved candidates to a server for cross-user
+pattern mining) was considered and **set aside** in favor of this memory-level, opt-in
+model — it keeps events *and* un-vetted candidates local.
+
+---
+
+## Milestone 18-4 — Map-reduce extraction for oversized segments (ChunkingExtractor)
+
+(Logically part of the M18 extraction family; parked at the bottom because it is
+optional polish, not on the critical path.)
+
+### Goal
+Extract from a segment that is too large for one model call **without losing data**.
+M18-3's size caps (per-event truncation + a total-prompt budget) are a *lossy* floor:
+events past the budget are dropped. This milestone makes large-segment extraction
+*lossless* by splitting the segment's events into prompt-sized chunks, extracting each,
+and concatenating the candidates — a shallow **map-reduce** (one level of fan-out, no
+deep recursion).
+
+### Why a separate, optional milestone
+It trades **LLM cost for completeness**: a chunked segment costs N model calls instead
+of 1. So it is opt-in and cost-bounded, and small segments are completely unaffected
+(they stay a single call). M18-3's truncation remains the cheap default and the floor.
+
+### Design (option B — chunk in the extractor)
+A `ChunkingExtractor` **decorator** over the `MemoryExtractor` protocol; the worker,
+prompt builder, and protocol are unchanged. Segments stay *temporal* units (one
+coherent session); chunking is purely an extraction concern.
+
+```
+ChunkingExtractor(base, *, max_chunks=8):
+  extract(segment, events):
+    if fits_in_one_prompt(events):        # cost guard: no fan-out when unnecessary
+        return base.extract(segment, events)
+    chunks = pack(events, budget=_MAX_PROMPT_EVENTS_CHARS)[:max_chunks]
+    results = [base.extract(segment, chunk) for chunk in chunks]   # map
+    return concat_candidates(results)     # reduce = dedupe-on-create, see below
+```
+
+- **Chunk boundary = the M18-3 budget.** Reuse `_MAX_PROMPT_EVENTS_CHARS` as the
+  per-chunk size; greedy chronological packing. Per-event truncation
+  (`_MAX_EVENT_PAYLOAD_CHARS`) stays as the floor *inside* a chunk (a single giant
+  event still gets capped).
+- **The "reduce" is mostly free.** After M18-3 each candidate flows through
+  `create_memory` → **dedupe-on-create already merges cross-chunk duplicates**. So v1
+  needs *no* LLM reduce: concatenate chunk candidates and let dedupe consolidate. (A
+  true LLM *synthesis* reduce — for a lesson whose evidence spans chunks — is deferred.)
+- **Cost guard.** Only fan out when a single prompt would exceed the budget; cap
+  `max_chunks` (default ~8) and fall back to truncation beyond it. Opt-in via a flag
+  (e.g. `memory-mcp process --chunk-extraction`), default off.
+
+### Caveats
+- N× LLM cost/latency for chunked segments (bounded by `max_chunks`).
+- Cross-chunk lessons get split — a candidate's `evidence_event_ids` only reference
+  within-chunk events. Acceptable for v1; the synthesis reduce would fix it.
+- Chunks are plain extractor CLI calls (each already covered by the
+  `MEMORY_MCP_DISABLE_CAPTURE` recursion guard) — **not** nested Claude Code subagents.
+  Keep it that way: simpler, no agent orchestration, shallow by construction.
+
+### Changes
+- `pipeline/extractors.py`: add `ChunkingExtractor` + a `pack`/`fits_in_one_prompt`
+  helper reusing the existing budget constants; factor the events-packing logic shared
+  with `build_extraction_prompt`.
+- Wiring: an opt-in `--chunk-extraction` (+ `--max-chunks`) flag on `memory-mcp process`
+  that wraps the selected extractor; default off (truncation path unchanged).
+- Tests: a large multi-chunk segment yields candidates from multiple chunks; a small
+  segment makes exactly one call (no fan-out); cross-chunk duplicates dedupe to one
+  memory; `max_chunks` cap falls back to truncation.
+
+### Relationship to M18-3
+- **M18-3 (shipped):** truncate to fit — cheap, lossy floor, always on.
+- **M18-4 (this):** chunk to fit — lossless, opt-in, costs more. Truncation stays the
+  fallback when `max_chunks` is exceeded.

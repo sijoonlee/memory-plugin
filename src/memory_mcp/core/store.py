@@ -272,6 +272,7 @@ class LocalMemoryStore:
         *,
         status: str | None = None,
         project: str | None = None,
+        is_reviewed: bool | None = None,
     ) -> list[MemoryRecord]:
         query = "SELECT record_json FROM memories"
         clauses: list[str] = []
@@ -282,6 +283,9 @@ class LocalMemoryStore:
         if project is not None:
             clauses.append("project = ?")
             params.append(project)
+        if is_reviewed is not None:
+            clauses.append("is_reviewed = ?")
+            params.append(int(is_reviewed))
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY created_at, id"
@@ -292,6 +296,50 @@ class LocalMemoryStore:
     def update_memory(self, record: MemoryRecord) -> None:
         with self._connect_sqlite() as conn:
             self._write_memory_record(conn, record)
+
+    def set_reviewed(self, memory_id: str, value: bool) -> MemoryRecord | None:
+        """Toggle the review-inbox flag. Independent of status/retrieval."""
+
+        record = self.get_memory(memory_id)
+        if record is None:
+            return None
+        updated = record.model_copy(
+            update={"is_reviewed": value, "updated_at": datetime.now(timezone.utc)}
+        )
+        self.update_memory(updated)
+        return updated
+
+    def archive_memory(self, memory_id: str) -> MemoryRecord | None:
+        """Soft delete: ``status -> archived`` (excluded from search, row kept).
+
+        A status flip only — the vector persists, so ``restore_memory`` needs no
+        re-embedding.
+        """
+
+        record = self.get_memory(memory_id)
+        if record is None:
+            return None
+        if record.status == "archived":
+            return record
+        updated = record.model_copy(
+            update={"status": "archived", "updated_at": datetime.now(timezone.utc)}
+        )
+        self.update_memory(updated)
+        return updated
+
+    def restore_memory(self, memory_id: str) -> MemoryRecord | None:
+        """Reverse a soft delete: ``archived -> active``."""
+
+        record = self.get_memory(memory_id)
+        if record is None:
+            return None
+        if record.status != "archived":
+            return record
+        updated = record.model_copy(
+            update={"status": "active", "updated_at": datetime.now(timezone.utc)}
+        )
+        self.update_memory(updated)
+        return updated
 
     def record_feedback(self, feedback: MemoryFeedback) -> MemoryRecord | None:
         record = self.get_memory(feedback.memory_id)
@@ -366,11 +414,16 @@ class LocalMemoryStore:
                 """
             )
             self._ensure_memories_project_column(conn)
+            self._ensure_memories_is_reviewed_column(conn)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_status_reviewed "
+                "ON memories(status, is_reviewed)"
             )
             conn.execute(
                 """
@@ -398,6 +451,19 @@ class LocalMemoryStore:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(memories)")}
         if "project" not in columns:
             conn.execute("ALTER TABLE memories ADD COLUMN project TEXT")
+
+    def _ensure_memories_is_reviewed_column(self, conn: sqlite3.Connection) -> None:
+        """Add the denormalized ``is_reviewed`` column to pre-M18-3 stores.
+
+        Existing rows backfill to ``0`` (unread); the column is the cheap filter
+        for the review inbox.
+        """
+
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(memories)")}
+        if "is_reviewed" not in columns:
+            conn.execute(
+                "ALTER TABLE memories ADD COLUMN is_reviewed INTEGER NOT NULL DEFAULT 0"
+            )
 
     def get_checkpoint(self, name: str) -> str | None:
         with self._connect_sqlite() as conn:
@@ -452,9 +518,9 @@ class LocalMemoryStore:
                 """
                 INSERT INTO memories (
                     id, record_json, content_for_embedding, tags_json, score,
-                    confidence, status, project, created_at, updated_at
+                    confidence, status, project, is_reviewed, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.id,
@@ -465,6 +531,7 @@ class LocalMemoryStore:
                     record.confidence,
                     record.status,
                     record.project,
+                    int(record.is_reviewed),
                     _dt_to_text(record.created_at),
                     _dt_to_text(record.updated_at),
                 ),
@@ -606,6 +673,7 @@ class LocalMemoryStore:
             score = ?,
             confidence = ?,
             status = ?,
+            is_reviewed = ?,
             updated_at = ?
         WHERE id = ?
         """
@@ -617,6 +685,7 @@ class LocalMemoryStore:
             record.score,
             record.confidence,
             record.status,
+            int(record.is_reviewed),
             _dt_to_text(record.updated_at),
             record.id,
         )

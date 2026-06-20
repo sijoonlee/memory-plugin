@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,13 @@ def append(
     root: Path = typer.Option(Path(".memory-mcp"), help="Memory MCP store root."),
     quiet: bool = typer.Option(False, help="Suppress stdout for hook execution."),
 ) -> None:
+    # Break the self-ingestion loop: when the LLM extractor runs the agent CLI,
+    # that agent's own UserPromptSubmit/PostToolUse hooks fire and would append
+    # the (huge) extraction prompt back as events. The extractor sets this flag in
+    # the subprocess env so the capture hooks no-op.
+    if os.environ.get("MEMORY_MCP_DISABLE_CAPTURE") == "1":
+        return
+
     payload_dict = _read_payload(payload)
     if adapter is not None:
         try:
@@ -53,6 +61,24 @@ def append(
     )
     if not quiet:
         typer.echo(event.model_dump_json(indent=2))
+
+
+@app.command()
+def delete(
+    event_id: str = typer.Argument(..., help="Event id to remove."),
+    root: Path = typer.Option(Path(".memory-mcp"), help="Memory MCP store root."),
+) -> None:
+    """Permanently delete one raw event by id.
+
+    For pruning junk/oversized captures. Session segments are derived, so run
+    ``memory-mcp rebuild-sessions`` afterwards to refresh segment counts. Exits
+    non-zero for an unknown id.
+    """
+
+    deleted = EventStore(root).delete_event(event_id)
+    typer.echo(json.dumps({"deleted": deleted, "event_id": event_id}))
+    if not deleted:
+        raise typer.Exit(1)
 
 
 @app.command()

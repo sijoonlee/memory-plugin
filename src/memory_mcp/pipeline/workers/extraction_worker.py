@@ -125,10 +125,12 @@ class ExtractionWorker:
                     "candidate referenced evidence events outside the segment: "
                     + ", ".join(sorted(unknown_ids))
                 )
-            # One unified model: the extractor's situation/lesson/action/category
-            # map onto when_useful/details/tags; the raw fields are preserved in
-            # source.extra for review display + provenance.
-            self.memory_store.create_pending(
+            # M18-3: no approval gate — extraction creates an active memory
+            # directly (redacted + embedded + deduped). It is immediately
+            # searchable and starts unread (is_reviewed=False) for the inbox.
+            # The extractor's situation/lesson/action/category map onto
+            # when_useful/details/tags; raw fields are kept in source.extra.
+            self.memory_store.create_memory(
                 MemoryCreate(
                     when_useful=candidate.situation,
                     details=compose_details(candidate.lesson, candidate.action),

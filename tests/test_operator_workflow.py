@@ -119,4 +119,6 @@ def test_operator_process_runs_events_sessions_and_extraction(tmp_path) -> None:
     assert result.decay["decayed"] == 0
     assert result.status.events["unprocessed"] == 0
     assert result.status.sessions["processed"] == 1
-    assert result.status.candidates["pending_review"] == 1
+    # M18-3: extraction lands an active, unread memory (no pending gate).
+    assert result.status.memories["active"] == 1
+    assert result.status.memories["unread"] == 1

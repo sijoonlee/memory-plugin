@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Literal, Protocol, TypeVar
+
+# Bound the extraction prompt so it cannot exceed the model's context window and
+# fail the whole segment: cap each event's payload, and cap the total events
+# section (a long segment can have hundreds of events).
+_MAX_EVENT_PAYLOAD_CHARS = 8000
+_MAX_PROMPT_EVENTS_CHARS = 120_000
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -253,15 +260,43 @@ class ClaudeCliMergeProposer:
         return _parse_structured(raw_output, MergeProposalResult, provider="claude")
 
 
+def _event_for_prompt(event: EventRecord) -> dict:
+    """Serialize an event, truncating an oversized payload to a bounded preview."""
+
+    data = event.model_dump(mode="json")
+    text = json.dumps(data.get("payload"), ensure_ascii=False)
+    if len(text) > _MAX_EVENT_PAYLOAD_CHARS:
+        data["payload"] = {
+            "_truncated": True,
+            "_original_chars": len(text),
+            "preview": text[:_MAX_EVENT_PAYLOAD_CHARS],
+        }
+    return data
+
+
 def build_extraction_prompt(
     *,
     segment: SessionSegmentRecord,
     events: list[EventRecord],
 ) -> str:
-    payload = {
+    selected: list[dict] = []
+    used = 0
+    for event in events:
+        data = _event_for_prompt(event)
+        size = len(json.dumps(data, ensure_ascii=False))
+        # Always include at least one event; each is already <= the per-event cap.
+        if selected and used + size > _MAX_PROMPT_EVENTS_CHARS:
+            break
+        selected.append(data)
+        used += size
+
+    payload: dict = {
         "session_segment": segment.model_dump(mode="json"),
-        "events": [event.model_dump(mode="json") for event in events],
+        "events": selected,
     }
+    omitted = len(events) - len(selected)
+    if omitted:
+        payload["_events_omitted"] = omitted
     return (
         "You are extracting durable memory candidates for a local agent memory system.\n"
         "Return only JSON that matches the provided output schema.\n\n"
@@ -349,6 +384,10 @@ def _run_cli_subprocess(
             timeout=timeout_seconds,
             check=False,
             cwd=cwd,
+            # Disable memory-mcp event capture inside the extractor's own agent
+            # CLI run, so its hooks don't append the extraction prompt back as
+            # events (the self-ingestion loop).
+            env={**os.environ, "MEMORY_MCP_DISABLE_CAPTURE": "1"},
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"{provider} timed out after {timeout_seconds}s") from exc
