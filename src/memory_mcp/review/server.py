@@ -12,7 +12,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from memory_mcp.core.events import MemoryCandidateCreate
+from memory_mcp.core.models import MemoryCreate
 from memory_mcp.review.service import (
     CandidateFilters,
     CandidateReviewService,
@@ -82,10 +82,12 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
         candidate_id = request.path_params["candidate_id"]
         body = await _json_body(request)
         update = CandidateUpdate.model_validate(body.get("update", {}))
-        candidate, memory = service.approve_candidate(candidate_id, update=update)
+        memory = service.approve_candidate(candidate_id, update=update)
+        # The candidate and the memory are now the same record (status flips to
+        # active/merged/rejected); both keys are returned for response stability.
         return _json(
             {
-                "candidate": candidate.model_dump(mode="json"),
+                "candidate": memory.model_dump(mode="json"),
                 "memory": memory.model_dump(mode="json"),
             }
         )
@@ -102,7 +104,7 @@ def create_app(root: Path | str = Path(".memory-mcp")) -> Starlette:
     async def merge_candidates(request: Request) -> Response:
         body = await _json_body(request)
         source_ids = body.get("source_ids") or []
-        merged = MemoryCandidateCreate.model_validate(body.get("merged", {}))
+        merged = MemoryCreate.model_validate(body.get("merged", {}))
         candidate = service.merge_candidates(source_ids, merged)
         return _json({"candidate": candidate.model_dump(mode="json")})
 

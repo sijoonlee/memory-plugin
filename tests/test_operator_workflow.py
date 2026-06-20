@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from memory_mcp.core.events import EventCreate, EventStore, MemoryCandidateCreate
-from memory_mcp.core.models import MemoryCreate, MemoryFeedback
+from memory_mcp.core.events import EventCreate, EventStore
+from memory_mcp.core.models import MemoryCreate, MemoryFeedback, MemorySource
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.pipeline.extractors import (
     ExtractedMemoryCandidate,
@@ -21,18 +21,16 @@ def test_operator_status_aggregates_runtime_counts(tmp_path) -> None:
     memory_store = LocalMemoryStore(root, FakeEmbedder())
     memory_store.create_memory(
         MemoryCreate(
-            what_happened="Direct pytest used the wrong environment.",
             when_useful="When running tests in this repo.",
-            helpful_explanation="Use uv run pytest.",
+            details="Direct pytest used the wrong environment. Use uv run pytest.",
             tags=["testing"],
         )
     )
     invalid = memory_store.create_memory(
         MemoryCreate(
-            what_happened="A stale testing memory.",
-            when_useful="When running tests in this repo.",
-            helpful_explanation="Use an old command.",
-            tags=["testing"],
+            when_useful="When deploying the billing service.",
+            details="A stale deployment note. Use an old command.",
+            tags=["deploy"],
         )
     )
     memory_store.record_feedback(
@@ -47,14 +45,16 @@ def test_operator_status_aggregates_runtime_counts(tmp_path) -> None:
             payload={"prompt": "Use uv run pytest."},
         )
     )
-    event_store.create_memory_candidate(
-        MemoryCandidateCreate(
-            situation="When running tests.",
-            lesson="Use uv.",
-            action="Run uv run pytest.",
-            category="testing",
-            evidence_summary="User correction.",
-            creation_reason="Test setup.",
+    memory_store.create_pending(
+        MemoryCreate(
+            when_useful="When running tests.",
+            details="Use uv. Run uv run pytest.",
+            tags=["testing"],
+            source=MemorySource(
+                kind="pipeline_candidate",
+                creation_reason="Test setup.",
+                extra={"evidence_summary": "User correction.", "category": "testing"},
+            ),
         )
     )
 

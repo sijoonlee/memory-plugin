@@ -10,9 +10,8 @@ from conftest import FakeEmbedder
 def _create(store: LocalMemoryStore, lesson: str, tag: str) -> str:
     record = store.create_memory(
         MemoryCreate(
-            what_happened=lesson,
             when_useful=f"When working on {tag}.",
-            helpful_explanation=f"Do the {tag} thing.",
+            details=f"{lesson} Do the {tag} thing.",
             tags=[tag],
         )
     )

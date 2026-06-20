@@ -18,15 +18,16 @@ def test_mcp_service_contracts(tmp_path) -> None:
 
     created = memory_create(
         store,
-        what_happened="Direct pytest used the wrong environment.",
         when_useful="When running tests in this repo.",
-        helpful_explanation="Use uv run pytest.",
+        details="Direct pytest used the wrong environment. Use uv run pytest.",
         tags=["testing"],
         source={"kind": "manual"},
     )
 
     memory_id = created["memory"]["id"]
-    assert created["memory"]["what_happened"] == "Direct pytest used the wrong environment."
+    assert created["memory"]["details"] == (
+        "Direct pytest used the wrong environment. Use uv run pytest."
+    )
 
     found = memory_search(
         store,

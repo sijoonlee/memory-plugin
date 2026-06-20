@@ -42,9 +42,8 @@ def test_read_only_inspection_tools(tmp_path) -> None:
 
     created = memory_create(
         store,
-        what_happened="ran pytest with uv",
         when_useful="when running this project's tests",
-        helpful_explanation="use `uv run pytest`",
+        details="ran pytest with uv; use `uv run pytest`",
     )
     memory_id = created["memory"]["id"]
 
@@ -62,7 +61,7 @@ def test_read_only_inspection_tools(tmp_path) -> None:
     # status filter that matches nothing returns an empty, well-formed payload
     assert memory_list(store, status="archived")["memories"] == []
 
-    candidates = candidate_list(events, status="pending_review")
+    candidates = candidate_list(store, status="pending_review")
     assert candidates == {
         "status": "pending_review",
         "total": 0,
@@ -73,13 +72,13 @@ def test_read_only_inspection_tools(tmp_path) -> None:
 
 def test_memory_list_respects_limit(tmp_path) -> None:
     store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
-    for index in range(3):
-        memory_create(
-            store,
-            what_happened=f"event {index}",
-            when_useful="later",
-            helpful_explanation="do the thing",
-        )
+    topics = [
+        ("When configuring CI caching.", "Cache the uv directory between runs.", "ci"),
+        ("When naming database columns.", "Use snake_case for all column names.", "db"),
+        ("When handling timezone math.", "Store timestamps in UTC; convert on display.", "time"),
+    ]
+    for when_useful, details, tag in topics:
+        memory_create(store, when_useful=when_useful, details=details, tags=[tag])
 
     listed = memory_list(store, status="active", limit=2)
     assert listed["total"] == 3

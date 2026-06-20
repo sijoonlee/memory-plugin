@@ -8,7 +8,8 @@ from typing import Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from memory_mcp.core.events import EventRecord, MemoryCandidateRecord, SessionSegmentRecord
+from memory_mcp.core.events import EventRecord, SessionSegmentRecord
+from memory_mcp.core.models import MemoryRecord
 
 MemoryCandidateCategory = Literal[
     "clue_location",
@@ -88,7 +89,7 @@ class MergeProposer(Protocol):
     def propose(
         self,
         *,
-        candidates: list[MemoryCandidateRecord],
+        candidates: list[MemoryRecord],
     ) -> MergeProposalResult:
         ...
 
@@ -113,7 +114,7 @@ class StaticMergeProposer:
     def propose(
         self,
         *,
-        candidates: list[MemoryCandidateRecord],
+        candidates: list[MemoryRecord],
     ) -> MergeProposalResult:
         return self.result
 
@@ -205,7 +206,7 @@ class CodexCliMergeProposer:
     def propose(
         self,
         *,
-        candidates: list[MemoryCandidateRecord],
+        candidates: list[MemoryRecord],
     ) -> MergeProposalResult:
         prompt = build_merge_prompt(candidates=candidates)
         raw_output = _run_codex_exec(
@@ -237,7 +238,7 @@ class ClaudeCliMergeProposer:
     def propose(
         self,
         *,
-        candidates: list[MemoryCandidateRecord],
+        candidates: list[MemoryRecord],
     ) -> MergeProposalResult:
         prompt = build_merge_prompt(candidates=candidates)
         raw_output = _run_claude_print(
@@ -280,16 +281,27 @@ def build_extraction_prompt(
     )
 
 
-def build_merge_prompt(*, candidates: list[MemoryCandidateRecord]) -> str:
+def compose_details(lesson: str, action: str) -> str:
+    """Combine the extractor's ``lesson`` + ``action`` into a memory ``details`` body."""
+
+    lesson = lesson.strip()
+    action = action.strip()
+    if not action:
+        return lesson
+    if not lesson:
+        return action
+    return f"{lesson}\n\nHow to apply: {action}"
+
+
+def build_merge_prompt(*, candidates: list[MemoryRecord]) -> str:
     payload = [
         {
             "id": candidate.id,
-            "situation": candidate.situation,
-            "lesson": candidate.lesson,
-            "action": candidate.action,
-            "category": candidate.category,
+            "when_useful": candidate.when_useful,
+            "details": candidate.details,
+            "category": (candidate.tags[0] if candidate.tags else None),
             "confidence": candidate.confidence,
-            "evidence_summary": candidate.evidence_summary,
+            "evidence_summary": candidate.source.extra.get("evidence_summary", ""),
         }
         for candidate in candidates
     ]

@@ -22,17 +22,13 @@ def _store(root: Path) -> LocalMemoryStore:
 
 @app.command()
 def create(
-    situation: str = typer.Option(
+    when_useful: str = typer.Option(
         ...,
-        help="When this memory should be retrieved.",
+        help="The recall cue: when this memory should be retrieved.",
     ),
-    lesson: str = typer.Option(
+    details: str = typer.Option(
         ...,
-        help="What was learned.",
-    ),
-    action: str = typer.Option(
-        ...,
-        help="What the agent should do next time.",
+        help="The memory body: what was learned and how to apply it.",
     ),
     tag: list[str] | None = typer.Option(None),
     project: str | None = typer.Option(
@@ -43,9 +39,8 @@ def create(
 ) -> None:
     record = _store(root).create_memory(
         MemoryCreate(
-            what_happened=lesson,
-            when_useful=situation,
-            helpful_explanation=action,
+            when_useful=when_useful,
+            details=details,
             tags=tag or [],
             project=project,
         )

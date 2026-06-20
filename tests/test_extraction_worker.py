@@ -11,8 +11,11 @@ from memory_mcp.pipeline.extractors import (
     ExtractionResult,
     StaticMemoryExtractor,
 )
+from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.pipeline.workers.extraction_worker import ExtractionWorker
 from memory_mcp.pipeline.workers.session_worker import SessionWorker
+
+from conftest import FakeEmbedder
 
 
 def test_extraction_schema_forbids_additional_properties() -> None:
@@ -118,6 +121,7 @@ def test_claude_cli_extractor_passes_model_effort_and_schema(monkeypatch) -> Non
 
 def test_extraction_worker_creates_pending_candidate_from_idle_segment(tmp_path) -> None:
     event_store = EventStore(tmp_path / "memory")
+    memory_store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
     event = event_store.append_event(
         EventCreate(
             event_type="user_prompt",
@@ -133,6 +137,7 @@ def test_extraction_worker_creates_pending_candidate_from_idle_segment(tmp_path)
     )
     worker = ExtractionWorker(
         event_store=event_store,
+        memory_store=memory_store,
         extractor=StaticMemoryExtractor(
             ExtractionResult(
                 candidates=[
@@ -158,14 +163,15 @@ def test_extraction_worker_creates_pending_candidate_from_idle_segment(tmp_path)
     assert result.remaining_idle_segments == 0
     segment = event_store.list_session_segments()[0]
     assert segment.status == "processed"
-    candidate = event_store.list_memory_candidates()[0]
+    candidate = memory_store.list_memories(status="pending_review")[0]
     assert candidate.status == "pending_review"
-    assert candidate.source_session_segment_id == segment.id
-    assert candidate.evidence_event_ids == [event.id]
+    assert candidate.source.extra["source_session_segment_id"] == segment.id
+    assert candidate.source.evidence_event_ids == [event.id]
 
 
 def test_extraction_worker_skips_segment_when_no_memory_found(tmp_path) -> None:
     event_store = EventStore(tmp_path / "memory")
+    memory_store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
     event_store.append_event(
         EventCreate(
             event_type="turn_stop",
@@ -181,6 +187,7 @@ def test_extraction_worker_skips_segment_when_no_memory_found(tmp_path) -> None:
     )
     worker = ExtractionWorker(
         event_store=event_store,
+        memory_store=memory_store,
         extractor=StaticMemoryExtractor(
             ExtractionResult(candidates=[], no_memory_reason="No reusable lesson.")
         ),
@@ -192,7 +199,7 @@ def test_extraction_worker_skips_segment_when_no_memory_found(tmp_path) -> None:
     segment = event_store.list_session_segments()[0]
     assert segment.status == "skipped"
     assert segment.error == "No reusable lesson."
-    assert event_store.list_memory_candidates() == []
+    assert memory_store.list_memories(status="pending_review") == []
 
     # The LLM's no_memory_reason is surfaced in the worker result, not just the DB.
     assert len(result.skipped) == 1
@@ -203,6 +210,7 @@ def test_extraction_worker_skips_segment_when_no_memory_found(tmp_path) -> None:
 
 def test_extraction_worker_can_target_one_idle_segment(tmp_path) -> None:
     event_store = EventStore(tmp_path / "memory")
+    memory_store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
     first_event = event_store.append_event(
         EventCreate(
             event_type="user_prompt",
@@ -233,6 +241,7 @@ def test_extraction_worker_can_target_one_idle_segment(tmp_path) -> None:
     ][0]
     worker = ExtractionWorker(
         event_store=event_store,
+        memory_store=memory_store,
         extractor=StaticMemoryExtractor(
             ExtractionResult(
                 candidates=[
@@ -255,7 +264,7 @@ def test_extraction_worker_can_target_one_idle_segment(tmp_path) -> None:
 
     assert result.processed_segments == 1
     assert event_store.get_session_segment(target_segment.id).status == "processed"  # type: ignore[union-attr]
-    assert event_store.list_memory_candidates()[0].evidence_event_ids == [target_event.id]
+    assert memory_store.list_memories(status="pending_review")[0].source.evidence_event_ids == [target_event.id]
     untouched_segments = [
         segment
         for segment in event_store.list_session_segments()
@@ -267,6 +276,7 @@ def test_extraction_worker_can_target_one_idle_segment(tmp_path) -> None:
 
 def test_extraction_worker_fails_segment_on_unknown_evidence_event(tmp_path) -> None:
     event_store = EventStore(tmp_path / "memory")
+    memory_store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
     event_store.append_event(
         EventCreate(
             event_type="user_prompt",
@@ -282,6 +292,7 @@ def test_extraction_worker_fails_segment_on_unknown_evidence_event(tmp_path) -> 
     )
     worker = ExtractionWorker(
         event_store=event_store,
+        memory_store=memory_store,
         extractor=StaticMemoryExtractor(
             ExtractionResult(
                 candidates=[
@@ -306,7 +317,7 @@ def test_extraction_worker_fails_segment_on_unknown_evidence_event(tmp_path) -> 
     segment = event_store.list_session_segments()[0]
     assert segment.status == "failed"
     assert "evt_missing" in (segment.error or "")
-    assert event_store.list_memory_candidates() == []
+    assert memory_store.list_memories(status="pending_review") == []
 
 
 def _segment() -> SessionSegmentRecord:

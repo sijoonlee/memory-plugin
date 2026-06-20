@@ -17,9 +17,8 @@ def test_event_worker_processes_feedback_events_and_marks_processed(tmp_path) ->
     worker = EventWorker(memory_store=memory_store, event_store=event_store)
     memory = memory_store.create_memory(
         MemoryCreate(
-            what_happened="Direct pytest used the wrong environment.",
             when_useful="When running tests in this repo.",
-            helpful_explanation="Use uv run pytest.",
+            details="Direct pytest used the wrong environment. Use uv run pytest.",
             tags=["testing"],
         )
     )
@@ -54,9 +53,8 @@ def test_event_worker_feedback_event_can_mark_memory_invalid(tmp_path) -> None:
     worker = EventWorker(memory_store=memory_store, event_store=event_store)
     memory = memory_store.create_memory(
         MemoryCreate(
-            what_happened="Use direct pytest.",
             when_useful="When running tests in this repo.",
-            helpful_explanation="Run pytest directly.",
+            details="Use direct pytest. Run pytest directly.",
             tags=["testing"],
         )
     )
@@ -86,9 +84,8 @@ def test_event_worker_skips_already_applied_feedback_events(tmp_path) -> None:
     worker = EventWorker(memory_store=memory_store, event_store=event_store)
     memory = memory_store.create_memory(
         MemoryCreate(
-            what_happened="Direct pytest used the wrong environment.",
             when_useful="When running tests in this repo.",
-            helpful_explanation="Use uv run pytest.",
+            details="Direct pytest used the wrong environment. Use uv run pytest.",
             tags=["testing"],
         )
     )
@@ -119,9 +116,8 @@ def test_event_worker_processes_retrieval_event_as_weak_score_signal(tmp_path) -
     worker = EventWorker(memory_store=memory_store, event_store=event_store)
     memory = memory_store.create_memory(
         MemoryCreate(
-            what_happened="Use uv run pytest.",
             when_useful="When running tests.",
-            helpful_explanation="Direct pytest can use the wrong environment.",
+            details="Use uv run pytest. Direct pytest can use the wrong environment.",
             tags=["testing"],
         )
     )
@@ -166,9 +162,8 @@ def test_decay_worker_applies_daily_decay_once_per_day(tmp_path) -> None:
     worker = DecayWorker(memory_store=memory_store)
     memory = memory_store.create_memory(
         MemoryCreate(
-            what_happened="Use uv run pytest.",
             when_useful="When running tests.",
-            helpful_explanation="Direct pytest can use the wrong environment.",
+            details="Use uv run pytest. Direct pytest can use the wrong environment.",
             tags=["testing"],
             score=1.0,
         )

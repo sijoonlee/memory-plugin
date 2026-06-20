@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from memory_mcp.core.events import MemoryCandidateCreate, MemoryCandidateRecord
-from memory_mcp.pipeline.extractors import MergeProposer
+from memory_mcp.core.models import MemoryCreate, MemoryRecord, MemorySource
+from memory_mcp.pipeline.extractors import MergeProposer, compose_details
 from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
 
 _STOP_WORDS = {"a", "an", "and", "or", "the", "to", "of", "in", "this"}
@@ -17,13 +17,13 @@ class MergeProposalWorkerResult:
 
 
 class MergeProposalWorker:
-    """Cluster similar pending candidates and ask an LLM to propose merges.
+    """Cluster similar pending memories and ask an LLM to propose merges.
 
     The clustering is deterministic (category match plus lexical overlap). The
     LLM only proposes merged content; the actual merge is performed through the
     human-gated 13A primitive (`CandidateWorker.merge_candidates`), which yields
-    a new `pending_review` candidate. The worker never creates active memories —
-    a human still approves the merged candidate.
+    a new `pending_review` memory. The worker never creates active memories — a
+    human still approves the merged memory.
     """
 
     def __init__(
@@ -54,20 +54,27 @@ class MergeProposalWorker:
             if not proposal.should_merge:
                 declined += 1
                 continue
+            category = proposal.category or _candidate_category(cluster[0])
             self.candidate_worker.merge_candidates(
                 [candidate.id for candidate in cluster],
-                MemoryCandidateCreate(
-                    situation=proposal.situation,
-                    lesson=proposal.lesson,
-                    action=proposal.action,
-                    category=proposal.category or cluster[0].category,
+                MemoryCreate(
+                    when_useful=proposal.situation,
+                    details=compose_details(proposal.lesson, proposal.action),
+                    tags=[category] if category else [],
                     confidence=proposal.confidence,
-                    creation_reason="LLM-proposed merge of related candidates.",
-                    evidence_summary=proposal.evidence_summary,
-                    metadata={
-                        "proposer": "llm",
-                        "merge_proposal_reason": proposal.reason,
-                    },
+                    source=MemorySource(
+                        kind="pipeline_merge",
+                        creation_reason="LLM-proposed merge of related candidates.",
+                        extra={
+                            "proposer": "llm",
+                            "merge_proposal_reason": proposal.reason,
+                            "evidence_summary": proposal.evidence_summary,
+                            "situation": proposal.situation,
+                            "lesson": proposal.lesson,
+                            "action": proposal.action,
+                            "category": category,
+                        },
+                    ),
                 ),
             )
             created += 1
@@ -80,9 +87,9 @@ class MergeProposalWorker:
 
 
 def _cluster_candidates(
-    candidates: list[MemoryCandidateRecord],
+    candidates: list[MemoryRecord],
     threshold: float,
-) -> list[list[MemoryCandidateRecord]]:
+) -> list[list[MemoryRecord]]:
     """Single-linkage cluster by shared category and lexical overlap."""
 
     count = len(candidates)
@@ -100,19 +107,26 @@ def _cluster_candidates(
     tokens = [_candidate_tokens(candidate) for candidate in candidates]
     for i in range(count):
         for j in range(i + 1, count):
-            if candidates[i].category != candidates[j].category:
+            if _candidate_category(candidates[i]) != _candidate_category(candidates[j]):
                 continue
             if _jaccard(tokens[i], tokens[j]) >= threshold:
                 union(i, j)
 
-    groups: dict[int, list[MemoryCandidateRecord]] = {}
+    groups: dict[int, list[MemoryRecord]] = {}
     for index in range(count):
         groups.setdefault(find(index), []).append(candidates[index])
     return list(groups.values())
 
 
-def _candidate_tokens(candidate: MemoryCandidateRecord) -> set[str]:
-    return _tokens(f"{candidate.situation} {candidate.lesson} {candidate.action}")
+def _candidate_category(candidate: MemoryRecord) -> str:
+    category = candidate.source.extra.get("category")
+    if isinstance(category, str) and category:
+        return category
+    return candidate.tags[0] if candidate.tags else ""
+
+
+def _candidate_tokens(candidate: MemoryRecord) -> set[str]:
+    return _tokens(f"{candidate.when_useful} {candidate.details}")
 
 
 def _tokens(text: str) -> set[str]:

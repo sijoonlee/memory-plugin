@@ -12,9 +12,12 @@ from memory_mcp.pipeline.workers.extraction_worker import ExtractionWorker
 from memory_mcp.pipeline.workers.session_worker import SessionWorker
 
 
-MEMORY_STATUSES = ["active", "stale", "superseded", "invalid", "rejected", "archived"]
+# After the M18-1 unification, candidates and memories share one table; the
+# status set is partitioned into the candidate lifecycle (pre-activation /
+# terminal) and the live-memory lifecycle.
+MEMORY_STATUSES = ["active", "stale", "superseded", "invalid"]
 SESSION_STATUSES = ["open", "idle", "processed", "skipped", "failed"]
-CANDIDATE_STATUSES = ["pending_review", "approved", "rejected", "merged", "archived"]
+CANDIDATE_STATUSES = ["pending_review", "rejected", "merged", "archived"]
 
 
 @dataclass(frozen=True)
@@ -71,7 +74,7 @@ class OperatorWorkflow:
                 for status in SESSION_STATUSES
             },
             candidates={
-                status: len(self.event_store.list_memory_candidates(status=status))
+                status: len(self.memory_store.list_memories(status=status))
                 for status in CANDIDATE_STATUSES
             },
             memories={
@@ -114,6 +117,7 @@ class OperatorWorkflow:
         else:
             extraction_result = ExtractionWorker(
                 event_store=self.event_store,
+                memory_store=self.memory_store,
                 extractor=extractor,
             ).run_once(limit=extraction_limit)
             extraction = asdict(extraction_result)

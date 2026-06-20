@@ -10,16 +10,15 @@ def test_create_get_search_and_export(tmp_path) -> None:
     store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
     record = store.create_memory(
         MemoryCreate(
-            what_happened="Direct pytest used the wrong environment.",
             when_useful="When running tests in this repo.",
-            helpful_explanation="Use uv run pytest so project dependencies resolve.",
+            details="Direct pytest used the wrong environment. Use uv run pytest so project dependencies resolve.",
             tags=["testing"],
         )
     )
 
     loaded = store.get_memory(record.id)
     assert loaded is not None
-    assert loaded.what_happened == "Direct pytest used the wrong environment."
+    assert loaded.details.startswith("Direct pytest used the wrong environment.")
 
     results = store.search_memories("how should tests run?", tags=["testing"])
     assert [result.memory.id for result in results] == [record.id]
@@ -39,9 +38,8 @@ def test_record_feedback_updates_score_and_counters(tmp_path) -> None:
     store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
     record = store.create_memory(
         MemoryCreate(
-            what_happened="A generated SDK was edited directly.",
             when_useful="When changing generated SDK behavior.",
-            helpful_explanation="Change the source schema and regenerate.",
+            details="A generated SDK was edited directly. Change the source schema and regenerate.",
             tags=["sdk"],
         )
     )
@@ -67,17 +65,37 @@ def test_record_feedback_updates_score_and_counters(tmp_path) -> None:
 def test_feedback_status_transitions(tmp_path) -> None:
     store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
 
-    stale = _create_memory(store, "stale memory")
-    contradicted_without_replacement = _create_memory(
+    # Distinct content so dedupe-on-create does not fold them together.
+    stale = _distinct_memory(
         store,
-        "contradicted memory without replacement",
+        "Configuring the billing webhook endpoint.",
+        "Point webhooks at the queue, not the API directly.",
+        "billing",
     )
-    contradicted_with_replacement = _create_memory(
+    contradicted_without_replacement = _distinct_memory(
         store,
-        "contradicted memory with replacement",
+        "Choosing a database migration tool.",
+        "Alembic autogenerate misses enum changes; edit by hand.",
+        "database",
     )
-    incorrect = _create_memory(store, "incorrect memory")
-    not_helpful = _create_memory(store, "not helpful memory")
+    contradicted_with_replacement = _distinct_memory(
+        store,
+        "Rendering large CSV exports.",
+        "Stream rows to avoid loading the whole file into memory.",
+        "export",
+    )
+    incorrect = _distinct_memory(
+        store,
+        "Authenticating the mobile client.",
+        "Refresh tokens rotate on every use; persist the newest.",
+        "auth",
+    )
+    not_helpful = _distinct_memory(
+        store,
+        "Styling the dashboard charts.",
+        "Use the shared theme palette for consistent colors.",
+        "frontend",
+    )
 
     assert store.record_feedback(
         MemoryFeedback(memory_id=stale.id, signal="stale")
@@ -123,9 +141,8 @@ def test_duplicate_memory_create_merges_into_existing_memory(tmp_path) -> None:
 
     duplicate = store.create_memory(
         MemoryCreate(
-            what_happened="Direct pytest used the wrong environment.",
             when_useful="When running tests in this repo.",
-            helpful_explanation="Use uv run pytest.",
+            details="Direct pytest used the wrong environment. Use uv run pytest.",
             tags=["python"],
             confidence=0.9,
             score=0.7,
@@ -146,9 +163,8 @@ def test_possible_duplicate_memory_create_is_rejected_for_review(tmp_path) -> No
 
     possible_duplicate = store.create_memory(
         MemoryCreate(
-            what_happened="Direct pytest used a different interpreter.",
             when_useful="When running tests in this repo.",
-            helpful_explanation="Use uv run pytest.",
+            details="Direct pytest used a different interpreter. Use uv run pytest.",
             tags=["testing"],
         )
     )
@@ -171,9 +187,8 @@ def test_distinct_memory_create_remains_active(tmp_path) -> None:
 
     second = store.create_memory(
         MemoryCreate(
-            what_happened="Generated SDK files should not be edited directly.",
             when_useful="When changing generated SDK behavior.",
-            helpful_explanation="Update the OpenAPI source and regenerate the SDK.",
+            details="Generated SDK files should not be edited directly. Update the OpenAPI source and regenerate the SDK.",
             tags=["sdk"],
         )
     )
@@ -186,9 +201,19 @@ def test_distinct_memory_create_remains_active(tmp_path) -> None:
 def _create_memory(store: LocalMemoryStore, lesson: str):
     return store.create_memory(
         MemoryCreate(
-            what_happened=lesson,
             when_useful="When running tests in this repo.",
-            helpful_explanation="Use uv run pytest.",
+            details=f"{lesson} Use uv run pytest.",
             tags=["testing"],
         )
+    )
+
+
+def _distinct_memory(
+    store: LocalMemoryStore,
+    when_useful: str,
+    details: str,
+    tag: str,
+):
+    return store.create_memory(
+        MemoryCreate(when_useful=when_useful, details=details, tags=[tag])
     )

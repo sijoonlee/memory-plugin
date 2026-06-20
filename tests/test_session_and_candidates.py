@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from memory_mcp.core.events import EventCreate, EventStore, MemoryCandidateCreate
+from memory_mcp.core.events import EventCreate, EventStore
+from memory_mcp.core.models import MemoryCreate, MemorySource
 from memory_mcp.core.store import LocalMemoryStore
 from memory_mcp.pipeline.workers.candidate_worker import CandidateWorker
 from memory_mcp.pipeline.workers.session_worker import SessionWorker
@@ -43,26 +44,33 @@ def test_candidate_worker_approves_candidate_into_memory(tmp_path) -> None:
     event_store = EventStore(tmp_path / "memory")
     memory_store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
     worker = CandidateWorker(event_store=event_store, memory_store=memory_store)
-    candidate = event_store.create_memory_candidate(
-        MemoryCandidateCreate(
-            situation="When running tests in this repo.",
-            lesson="Direct pytest uses the wrong environment.",
-            action="Use uv run pytest.",
-            category="durable_workflow",
+    candidate = worker.create_candidate(
+        MemoryCreate(
+            when_useful="When running tests in this repo.",
+            details="Direct pytest uses the wrong environment. Use uv run pytest.",
+            tags=["durable_workflow"],
             confidence=0.8,
-            creation_reason="User correction in session.",
-            evidence_event_ids=["evt_1"],
-            evidence_summary="The user corrected the test command.",
+            source=MemorySource(
+                kind="pipeline_candidate",
+                evidence_event_ids=["evt_1"],
+                creation_reason="User correction in session.",
+                extra={
+                    "evidence_summary": "The user corrected the test command.",
+                    "category": "durable_workflow",
+                },
+            ),
         )
     )
 
-    updated, memory = worker.approve_candidate(candidate.id)
+    assert candidate.status == "pending_review"
+    memory = worker.approve_candidate(candidate.id)
 
-    assert updated.status == "approved"
-    assert updated.approved_memory_id == memory.id
-    assert memory_store.get_memory(memory.id) is not None
+    # The candidate and the memory are the same record; status flips to active.
+    assert memory.id == candidate.id
+    assert memory.status == "active"
+    assert memory_store.get_memory(memory.id).status == "active"
     assert memory.when_useful == "When running tests in this repo."
-    assert memory.what_happened == "Direct pytest uses the wrong environment."
+    assert memory.details.startswith("Direct pytest uses the wrong environment.")
     assert memory.source.kind == "pipeline_candidate"
     assert memory.source.evidence_event_ids == ["evt_1"]
 
@@ -71,14 +79,16 @@ def test_candidate_worker_rejects_and_retries_candidate(tmp_path) -> None:
     event_store = EventStore(tmp_path / "memory")
     memory_store = LocalMemoryStore(tmp_path / "memory", FakeEmbedder())
     worker = CandidateWorker(event_store=event_store, memory_store=memory_store)
-    candidate = event_store.create_memory_candidate(
-        MemoryCandidateCreate(
-            situation="When using local docs.",
-            lesson="A vague lesson.",
-            action="Do something.",
-            category="user_correction",
-            creation_reason="Weak extractor output.",
-            evidence_summary="No concrete evidence.",
+    candidate = worker.create_candidate(
+        MemoryCreate(
+            when_useful="When using local docs.",
+            details="A vague lesson. Do something.",
+            tags=["user_correction"],
+            source=MemorySource(
+                kind="pipeline_candidate",
+                creation_reason="Weak extractor output.",
+                extra={"evidence_summary": "No concrete evidence."},
+            ),
         )
     )
 
@@ -86,7 +96,6 @@ def test_candidate_worker_rejects_and_retries_candidate(tmp_path) -> None:
     retried = worker.retry_candidate(candidate.id)
 
     assert rejected.status == "rejected"
-    assert rejected.rejection_reason == "Too vague."
+    assert rejected.source.extra["rejection_reason"] == "Too vague."
     assert retried.status == "pending_review"
-    assert retried.rejection_reason is None
-    assert retried.rejected_at is None
+    assert "rejection_reason" not in retried.source.extra
